@@ -43,6 +43,7 @@ export interface FullSafeModeAction {
 export type Culprit =
   | { kind: 'apply'; entryId: string; packageName: string }
   | { kind: 'unresolvable'; packageName: string }
+  | { kind: 'slot-conflict'; slotName: string }
 
 /**
  * Read the portion of the log belonging to the most recent boot attempt —
@@ -78,6 +79,15 @@ export function findCulprit(attemptLog: string): Culprit | undefined {
   const unresolvable = /cannot resolve profile bundle "([^"]+)"/g
   for (const match of attemptLog.matchAll(unresolvable)) {
     culprit = { kind: 'unresolvable', packageName: match[1] }
+  }
+  // rc.8 插槽冲突：两个插件争用同一 slot。错误形如
+  //   slot "xxx" conflict / duplicate slot "xxx" /
+  //   slot "xxx" already (registered|provided|occupied|taken)
+  // 此类冲突涉及两个插件，无法靠禁用单个 entry 干净解决，故只捕获
+  // slot 名，交给 proposeRecovery 走「插槽冲突」对话框 + 全量安全模式。
+  const slotConflict = /slot "([^"]+)" (?:conflict|duplicate|already (?:registered|provided|occupied|taken))/i
+  for (const match of attemptLog.matchAll(slotConflict)) {
+    culprit = { kind: 'slot-conflict', slotName: match[1] }
   }
   return culprit
 }

@@ -25,6 +25,27 @@ import {
   removeBundle,
   restoreAll,
 } from './safe-mode.js'
+import {
+  defaultGpuFallbackState,
+  gpuFallbackStateEquals,
+  gpuFallbackSwitches,
+  isGpuLossFatal,
+  parseGpuFallbackState,
+  planGpuFallbackResponse,
+  planStableLaunch,
+  serializeGpuFallbackState,
+  type GpuFallbackState,
+} from './gpu-fallback.js'
+import {
+  MAIN_WINDOW_RECOVERY_RELOAD_COOLDOWN_MS,
+  shouldReloadAfterMainWindowRendererLoss,
+} from './main-window-recovery.js'
+import { installContextMenu } from './context-menu.js'
+import { secureWindow } from './security.js'
+import { isDaemonLaunch, isUserInitiatedInstance } from './launchd-guard.js'
+import { raiseWindowWithoutStealingFocus, type WindowFocusIntent } from './window-raise.js'
+import { aboutDetail, bundledHarnessVersion } from './version-info.js'
+import { lockZoomFactor } from './windows-menu-view.js'
 
 /** First port tried for the dsh web server. */
 const FIRST_PORT = 3080
@@ -74,6 +95,54 @@ function logFile(): string {
   const dir = join(app.getPath('userData'), 'logs')
   mkdirSync(dir, { recursive: true })
   return join(dir, 'dsh.log')
+}
+
+/** GPU sandbox degradation state file (last effective level, persisted across launches). */
+function gpuFallbackStateFile(): string {
+  return join(app.getPath('userData'), 'gpu-fallback.json')
+}
+
+function loadGpuFallbackState(): GpuFallbackState {
+  try {
+    return parseGpuFallbackState(readFileSync(gpuFallbackStateFile(), 'utf8'))
+  } catch {
+    return defaultGpuFallbackState
+  }
+}
+
+function saveGpuFallbackState(state: GpuFallbackState): void {
+  try {
+    writeFileSync(gpuFallbackStateFile(), serializeGpuFallbackState(state) + '\n', 'utf8')
+  } catch {
+    // 非致命：丢失的只是下次启动的降级记忆
+  }
+}
+
+/**
+ * 渲染器/GPU 进程丢失后限流重载主窗口（与 Task 1 的 GPU 降级协作）。
+ * 非致命丢失走此路径重载；致命丢失由 render-process-gone 处理器接管。
+ */
+function reloadMainWindowAfterRendererLoss(win: BrowserWindow): void {
+  if (win.isDestroyed() || win.webContents.isDestroyed()) return
+  const now = Date.now()
+  if (!shouldReloadAfterMainWindowRendererLoss({
+    now,
+    lastReloadAt: mainWindowRecoveryReloadAt,
+    reloadCount: mainWindowRecoveryReloadCount,
+  })) {
+    appendFileSync(logFile(), `\n=== main window recovery: reload throttled (count=${mainWindowRecoveryReloadCount}) ===\n`)
+    return
+  }
+  mainWindowRecoveryReloadAt = now
+  mainWindowRecoveryReloadCount += 1
+  // 冷却的 4 倍后清零计数，使孤立崩溃干净恢复、持续失败仍触上限。
+  setTimeout(() => { mainWindowRecoveryReloadCount = 0 }, MAIN_WINDOW_RECOVERY_RELOAD_COOLDOWN_MS * 4).unref()
+  try {
+    void win.webContents.reload()
+    appendFileSync(logFile(), `\n=== main window recovery: reload #${mainWindowRecoveryReloadCount} ===\n`)
+  } catch (error) {
+    appendFileSync(logFile(), `\n=== main window recovery: reload threw: ${error instanceof Error ? error.message : String(error)} ===\n`)
+  }
 }
 
 /**
@@ -540,17 +609,58 @@ function createWindow(port: number): BrowserWindow {
     event.preventDefault()
     win.hide()
   })
-  // The UI is a local agent console; anything off-origin is an external link
-  // and belongs in the user's real browser.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url.startsWith('http://127.0.0.1:')) void shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  win.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith('http://127.0.0.1:')) {
-      event.preventDefault()
-      void shell.openExternal(url)
+  // Window-level navigation + permission guards (replaces the inline
+  // setWindowOpenHandler/will-navigate; adds webview block + trusted
+  // clipboard write). Foolgry stays single-window: external links always
+  // go to the system browser.
+  secureWindow(win)
+  installContextMenu(win, isZhLocale)
+  // First successful Harness render = this machine's GPU survived boot. After
+  // enough clean launches at a degraded level, planStableLaunch probes one
+  // level back up.
+  win.webContents.on('did-finish-load', () => {
+    if (harnessRendered) return
+    harnessRendered = true
+    const next = planStableLaunch(gpuFallbackState)
+    if (!gpuFallbackStateEquals(next, gpuFallbackState)) {
+      gpuFallbackState = next
+      saveGpuFallbackState(gpuFallbackState)
+      appendFileSync(logFile(), `\n=== gpu fallback stable launch probe: level -> ${gpuFallbackState.level} ===\n`)
     }
+  })
+  // Renderer/GPU process loss: take over Electron's default black-screen.
+  win.webContents.on('render-process-gone', (event, details) => {
+    const reason = details?.reason ?? 'unknown'
+    if (!isGpuLossFatal(reason)) {
+      reloadMainWindowAfterRendererLoss(win)
+      return
+    }
+    event.preventDefault()
+    appendFileSync(logFile(), `\n=== render-process-gone: reason=${reason} exitCode=${details?.exitCode ?? -1} harnessRendered=${harnessRendered} ===\n`)
+    const plan = planGpuFallbackResponse({ state: gpuFallbackState, harnessRendered })
+    gpuFallbackState = plan.state
+    saveGpuFallbackState(gpuFallbackState)
+    if (plan.relaunch) {
+      appendFileSync(logFile(), `\n=== gpu fallback: relaunching at level ${gpuFallbackState.level} ===\n`)
+      quitting = true
+      tray?.destroy()
+      if (dshChild && dshChild.exitCode === null) dshChild.kill()
+      app.relaunch()
+      app.exit(0)
+    }
+  })
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+    if (!isMainFrame) return
+    // A local Harness reachability failure is usually the renderer dropping,
+    // not a real network error.
+    appendFileSync(logFile(), `\n=== did-fail-load: errorCode=${errorCode} description=${errorDescription} ===\n`)
+    reloadMainWindowAfterRendererLoss(win)
+  })
+  win.webContents.on('unresponsive', () => {
+    appendFileSync(logFile(), `\n=== main window webContents unresponsive ===\n`)
+  })
+  win.webContents.on('responsive', () => {
+    appendFileSync(logFile(), `\n=== main window webContents responsive again ===\n`)
   })
   void win.loadURL(`http://127.0.0.1:${port}/`)
   return win
@@ -561,14 +671,12 @@ function createWindow(port: number): BrowserWindow {
  * Recreates it if it was somehow destroyed.
  * @param port - port the server bound
  */
-function showWindow(port: number): void {
+function showWindow(port: number, intent: WindowFocusIntent = 'automatic'): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = createWindow(port)
     return
   }
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.focus()
+  raiseWindowWithoutStealingFocus(mainWindow, process.platform, () => app.isActive(), intent)
 }
 
 /** Splash shown from app-ready until the dsh server answers; without it the
@@ -607,6 +715,7 @@ small{font-size:12px;opacity:.55}
     icon: devIcon(),
   })
   void splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  lockZoomFactor(splashWindow.webContents)
 }
 
 /** Tear the splash down once its job (covering the boot) is done. */
@@ -645,7 +754,7 @@ function createTray(port: number): void {
   const recovery = loadRecoveryActions(safeModeStateFile()).length > 0
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: labels.show, click: () => showWindow(port) },
+      { label: labels.show, click: () => showWindow(port, 'user') },
       { label: labels.update, click: () => void manualUpdateCheck() },
       // Troubleshooting entries: the log is the first place to look when the
       // UI misbehaves, and the data dir holds profiles/sessions/plugins.
@@ -667,7 +776,7 @@ function createTray(port: number): void {
       },
     ]),
   )
-  tray.on('click', () => showWindow(port))
+  tray.on('click', () => showWindow(port, 'user'))
 }
 
 /** Homebrew cask token for installs that came from the community tap. */
@@ -866,6 +975,18 @@ async function manualUpdateCheck(): Promise<void> {
  * localized tray. Roles stay attached so behaviors and accelerators (macOS
  * copy/paste especially) keep working.
  */
+/** About dialog showing both the desktop version and the bundled Harness version. */
+async function showAbout(): Promise<void> {
+  const zh = isZhLocale()
+  await dialog.showMessageBox({
+    type: 'info',
+    title: zh ? '关于 DSH Desktop' : 'About DSH Desktop',
+    message: 'DeepSeek Harness',
+    detail: aboutDetail(app.getVersion(), bundledHarnessVersion(app.getAppPath()), zh ? 'zh' : 'en'),
+    buttons: ['确定'],
+  })
+}
+
 function setupAppMenu(): void {
   const zh = isZhLocale()
   const t = zh
@@ -918,7 +1039,7 @@ function setupAppMenu(): void {
         {
           label: app.name,
           submenu: [
-            { role: 'about', label: t.about },
+            { label: t.about, click: () => void showAbout() },
             { type: 'separator' },
             checkItem,
             { type: 'separator' },
@@ -952,7 +1073,7 @@ function setupAppMenu(): void {
       viewMenu,
       {
         label: t.help,
-        submenu: [checkItem, { type: 'separator' }, { role: 'about', label: t.about }],
+        submenu: [checkItem, { type: 'separator' }, { label: t.about, click: () => void showAbout() }],
       },
     ]),
   )
@@ -1035,6 +1156,13 @@ let quitting = false
 /** Set once the server is ready and the window/tray exist; `activate` before
  * that point would otherwise create a window pointed at a dead port. */
 let booted = false
+/** GPU 沙箱降级状态：启动前从 userData 读入，崩溃时改写。 */
+let gpuFallbackState: GpuFallbackState = defaultGpuFallbackState
+/** 本机这次启动的 Harness 是否已成功渲染过（决定 GPU 丢失是否致命）。 */
+let harnessRendered = false
+/** 主窗口渲染器崩溃重载限流的计数与上次时间。 */
+let mainWindowRecoveryReloadAt = 0
+let mainWindowRecoveryReloadCount = 0
 
 /**
  * Ask the user about one recovery step. "View log" reveals the log in the
@@ -1114,6 +1242,23 @@ async function proposeRecovery(attempt: number, tried: Set<string>): Promise<boo
     appendFileSync(logFile(), `\n=== safe mode: removed bundle "${culprit.packageName}" from the profile ===\n`)
     return true
   }
+  if (culprit?.kind === 'slot-conflict' && !tried.has(`slot:${culprit.slotName}`)) {
+    tried.add(`slot:${culprit.slotName}`)
+    const approved = await confirmRecovery({
+      title: '插件插槽冲突',
+      message: `检测到插件插槽冲突（插槽：${culprit.slotName}），导致 DSH 无法启动。`,
+      detail:
+        '是否以安全模式启动？所有自行安装的插件都会被禁用（内置功能不受影响），' +
+        '启动成功后可通过托盘菜单「恢复被禁用的插件」一键还原。插槽冲突通常无法定位到' +
+        '单个插件，故采用整体禁用再逐个恢复的方式。',
+      confirm: '以安全模式启动',
+    })
+    if (!approved) return false
+    const action = enterFullSafeMode(dshHome(), profileDir, WEB_PROFILE_TEMPLATE)
+    recordRecoveryAction(safeModeStateFile(), action)
+    appendFileSync(logFile(), `\n=== safe mode: slot conflict "${culprit.slotName}" -> full plugin strip, removed bundles: ${action.removedBundles.join(', ') || '(none)'} ===\n`)
+    return true
+  }
   if (!tried.has('full')) {
     tried.add('full')
     const approved = await confirmRecovery({
@@ -1188,13 +1333,44 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    // Re-launching the app while it lives in the tray brings the window back.
+  // GPU sandbox degradation switches must be applied before Chromium starts
+  // (no effect after ready). Loaded from userData; default level = no switches.
+  // getPath may be unavailable this early on some builds, so degrade safely to
+  // the default level (first-launch behaviour) rather than crash startup.
+  try {
+    gpuFallbackState = loadGpuFallbackState()
+  } catch {
+    gpuFallbackState = defaultGpuFallbackState
+  }
+  for (const sw of gpuFallbackSwitches(gpuFallbackState.level)) {
+    app.commandLine.appendSwitch(sw)
+  }
+  try {
+    appendFileSync(logFile(), `\n=== gpu fallback level: ${gpuFallbackState.level} ===\n`)
+  } catch {
+    // 日志在 ready 前可能不可用，忽略
+  }
+
+  app.on('second-instance', (_event, argv) => {
+    // A rogue LaunchAgent daemonising this binary, or a synthetic launch
+    // carrying a script argument, is not a user focus request — ignore both.
+    if (isDaemonLaunch(process.env, process.platform)) {
+      try {
+        appendFileSync(logFile(), `\n=== second-instance ignored: daemon launch (LaunchAgent guard) ===\n`)
+      } catch { /* 忽略 */ }
+      return
+    }
+    if (!isUserInitiatedInstance(argv)) {
+      try {
+        appendFileSync(logFile(), `\n=== second-instance ignored: synthetic launch (script argument) ===\n`)
+      } catch { /* 忽略 */ }
+      return
+    }
+    // Re-launching the app while it lives in the tray brings the window back
+    // without stealing focus from the user's current app (macOS).
     const win = BrowserWindow.getAllWindows()[0]
     if (win) {
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
+      raiseWindowWithoutStealingFocus(win, process.platform, () => app.isActive(), 'automatic')
     }
   })
 
@@ -1232,7 +1408,7 @@ if (!gotLock) {
   // by `booted`: macOS can fire activate during launch, and creating the
   // window then would point it at a port the server hasn't bound yet.
   app.on('activate', () => {
-    if (booted && serverPort && !mainWindow?.isVisible()) showWindow(serverPort)
+    if (booted && serverPort && !mainWindow?.isVisible()) showWindow(serverPort, 'automatic')
   })
   app.on('will-quit', () => {
     tray?.destroy()
