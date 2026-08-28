@@ -1,0 +1,43 @@
+[
+  {
+    "id": "dsh-better-sidebar",
+    "name": "dsh-better-sidebar",
+    "source": "dsh-better-sidebar",
+    "desc": "侧边栏核心框架：增强侧边栏，支持多 Tab 面板（文件编辑/终端/Git/浏览器等）。其他 Tab 插件依赖它。",
+    "install": "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar",
+    "tabPlugin": true,
+    "core": true
+  },
+  {
+    "id": "@dsh-external/dsh-sentinel",
+    "name": "dsh-sentinel 唤醒系统",
+    "source": "git+https://github.com/fuhefei/dsh-sentinel.git",
+    "desc": "侧边栏 Tab：唤醒系统，监控会话状态，自动唤醒沉睡会话。",
+    "install": "cd ~/.dsh && dsh plugin --profile web add \"github:fuhefei/dsh-sentinel#v0.7.0\"",
+    "tabPlugin": true
+  },
+  {
+    "id": "dsh-git-remotes",
+    "name": "dsh-git-remotes Git 远程",
+    "source": "git+https://github.com/yq04/dsh-git-remotes.git",
+    "desc": "侧边栏 Tab：Git 远程管理，推送/拉取/分支管理。",
+    "install": "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add git+https://github.com/yq04/dsh-git-remotes.git",
+    "tabPlugin": true
+  },
+  {
+    "id": "dsh-sidebar-qa",
+    "name": "dsh-sidebar-qa 划选追问",
+    "source": "git+https://github.com/ChenRuoT/dsh-sidebar-qa.git",
+    "desc": "侧边栏 Tab：划选文本后一键追问 AI，提升阅读效率。",
+    "install": "cd ~/.dsh && dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add git+https://github.com/ChenRuoT/dsh-sidebar-qa.git",
+    "tabPlugin": true
+  },
+  {
+    "id": "dsh-context-doctor",
+    "name": "dsh-context-doctor",
+    "source": "git+https://github.com/Zhenyu98/dsh-context-doctor.git",
+    "desc": "侧边栏 Tab：上下文诊断器，分析和优化会话上下文。",
+    "install": "cd ~/.dsh && dsh plugin --profile web add git+https://github.com/Zhenyu98/dsh-context-doctor.git",
+    "tabPlugin": true
+  }
+]

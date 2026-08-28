@@ -1,0 +1,38 @@
+{
+  "name": "dsh-plugin-version-manager",
+  "description": "DSH 版本管理客户端插件：在官方侧边栏底部注入「版本管理」入口，面板内跟随官方稳定版/探索版双通道升级 dsh 内核、查看补丁状态。UI 走官方 ctx.slots.register + ui-primitives 组件 + --dsw-alias-* token + ctx.locale i18n，对齐官方范式。",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "license": "MIT"
+}

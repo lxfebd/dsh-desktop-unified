@@ -1,6 +1,6 @@
 {
-  "name": "dsh-desktop",
-  "productName": "DSH Desktop",
+  "name": "dsh-desktop-unified",
+  "productName": "DeepSeek Harness",
   "description": "Desktop shell for DeepSeek Harness: downloads as an installer, runs the dsh web UI with Electron's embedded Node — no system Node or npm required.",
   "version": "0.1.1-rc.2.202608240532",
   "private": true,
@@ -50,7 +50,9 @@
     "@pnpm/exe": "11.22.0",
     "dshmarket": "^1.10.1",
     "electron-updater": "^6.6.2",
-    "@deepseek-ai/dsh-authorization": "^0.1.1-rc.2"
+    "@deepseek-ai/dsh-authorization": "^0.1.1-rc.2",
+    "dsh-plugin-market": "file:plugins/dsh-plugin-market",
+    "dsh-plugin-version-manager": "file:plugins/dsh-plugin-version-manager"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

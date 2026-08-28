@@ -1,5 +1,5 @@
-appId: com.foolgry.dshdesktop
-productName: DSH Desktop
+appId: com.deepseek.dshdesktop
+productName: DeepSeek Harness
 copyright: MIT
 
 directories:
@@ -24,20 +24,20 @@ mac:
   # No ${productName} here: the space in "DSH Desktop" makes electron-builder
   # write a dashed safeArtifactName into latest-mac.yml while gh release upload
   # turns the space into a dot — the updater's download URL then 404s.
-  artifactName: DSH-Desktop-${version}-mac-arm64.${ext}
+  artifactName: DeepSeek-Harness-${version}-mac-arm64.${ext}
 
 win:
   icon: build/icon.ico
   target:
     - nsis
-  artifactName: DSH-Desktop-${version}-win-x64-setup.${ext}
+  artifactName: DeepSeek-Harness-${version}-win-x64-setup.${ext}
 
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  shortcutName: DSH Desktop
+  shortcutName: DeepSeek Harness
 
 publish:
   provider: github
-  owner: foolgry
-  repo: dsh-desktop
+  owner: deepseekhar
+  repo: dsh-desktop-unified

@@ -1,0 +1,11 @@
+# dsh-plugin-market bundle patch — inserted after the dsh-web-app layer.
+#
+# A single host row registering the marketplace's /api/market/* routes on the
+# official webServer, tapping the official index render to inject the
+# marketplace UI, and exposing market_* model tools so the AI can browse and
+# install plugins by itself. `webServer` and `tools` are provided by the
+# dsh-web-app bundle layer, so the row waits on them before applying.
+- insert:
+    - id: dsh-plugin-market
+      name: dsh-plugin-market
+      inject: [webServer, tools]

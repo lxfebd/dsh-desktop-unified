@@ -1,0 +1,10 @@
+# dsh-plugin-version-manager bundle patch
+# 只一行 host entry（注册 /api/version/* 路由）。
+# client.js 的浏览器加载由 package.json 的 dsh.client 字段触发：
+# ClientModuleRegistry 扫到这个 entry 后读 dsh.client + exports['./client']，
+# 自动组装 __DSH_BOOT__ 的 entry 并暴露 /plugins/<id>/client.js 路径。
+# 不需要在 yml 里写单独的 client 行 —— 那会导致同一包被 mount 两次。
+- insert:
+    - id: dsh-plugin-version-manager
+      name: dsh-plugin-version-manager
+      inject: [webServer]

@@ -133,7 +133,7 @@ function ensurePickerFallbackPatch(): string | undefined {
  * no network on the user's machine — the exact state `dsh plugin --profile
  * web add <name>` would produce, minus the registry round-trip.
  */
-const PRESET_PLUGINS = ['dshmarket']
+const PRESET_PLUGINS = ['dshmarket', 'dsh-plugin-market', 'dsh-plugin-version-manager']
 
 /**
  * The web profile's shipped bundle template. Must stay in sync with
