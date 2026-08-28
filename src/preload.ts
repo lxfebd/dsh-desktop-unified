@@ -7,6 +7,9 @@
  * @module dsh-desktop/preload
  */
 
+// 外壳控制预load（自绘标题栏 + shell:window/shell:get-state 桥）合并进主 preload。
+// Electron 单窗口仅支持一个 preload 文件，故以模块导入方式并入，而非单独注册。
+import './shell-titlebar-preload.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import { BRIDGE_CHANNELS, type BridgeName } from './capabilities.js'
 

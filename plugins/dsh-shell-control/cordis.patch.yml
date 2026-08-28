@@ -1,0 +1,9 @@
+# dsh-shell-control bundle patch — inserted after the dsh-web-app layer.
+#
+# 一行 host：注册 /api/shell/* 代理路由（转发到 Electron 壳的 shell-control 服务）
+# + 注册 8 个 shell_* AI 工具，让内置 AI 能修改外壳本身。webServer 提供代理路由，
+# tools 提供 AI 工具注册，二者均由 dsh-web-app bundle 层提供，故该行等待它们就绪。
+- insert:
+    - id: dsh-shell-control
+      name: dsh-shell-control
+      inject: [webServer, tools]

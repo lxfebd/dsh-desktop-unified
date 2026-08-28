@@ -1,0 +1,28 @@
+{
+  "name": "dsh-shell-control",
+  "description": "DeepSeek Harness 外壳控制插件：把 Electron 外壳的图标/边框/透明度/置顶/尺寸/状态暴露给内置 AI 与侧边栏面板，让 AI 能修改外壳本身。host 注册 8 个 AI 工具 + /api/shell/* 代理路由；client 注入侧边栏「外壳控制」面板。走官方 webServer+tools 服务与 ctx.slots.register 侧边栏槽位。",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ],
+      "platform": "web"
+    }
+  },
+  "license": "MIT"
+}

@@ -57,6 +57,13 @@ import { isDaemonLaunch, isUserInitiatedInstance } from './launchd-guard.js'
 import { raiseWindowWithoutStealingFocus, type WindowFocusIntent } from './window-raise.js'
 import { aboutDetail, bundledHarnessVersion } from './version-info.js'
 import { lockZoomFactor } from './windows-menu-view.js'
+import {
+  ensureShellIconFromMain,
+  loadPrefs,
+  startShellControl,
+  stopShellControl,
+  type ShellPrefs,
+} from './shell-control.js'
 
 /** First port tried for the dsh web server. */
 const FIRST_PORT = 3080
@@ -224,7 +231,7 @@ function ensurePickerFallbackPatch(): boolean {
  * no network on the user's machine — the exact state `dsh plugin --profile
  * web add <name>` would produce, minus the registry round-trip.
  */
-const PRESET_PLUGINS = ['dshmarket', 'dsh-plugin-market', 'dsh-plugin-version-manager']
+const PRESET_PLUGINS = ['dshmarket', 'dsh-plugin-market', 'dsh-plugin-version-manager', 'dsh-shell-control']
 
 /**
  * The web profile's shipped bundle template. Must stay in sync with
@@ -679,7 +686,7 @@ function registerCapabilityIpcHandlers(): void {
  * Create the single application window pointed at the local server.
  * @param port - port the server bound
  */
-function createWindow(port: number): BrowserWindow {
+function createWindow(port: number, prefs: ShellPrefs = loadPrefs()): BrowserWindow {
   const saved = loadWindowState()
   const win = new BrowserWindow({
     width: saved?.width ?? 1280,
@@ -687,6 +694,10 @@ function createWindow(port: number): BrowserWindow {
     ...(saved === undefined ? {} : { x: saved.x, y: saved.y }),
     minWidth: 800,
     minHeight: 600,
+    // frameless 模式移除系统标题栏，改由自绘标题栏（shell-titlebar-preload）接管。
+    frame: !prefs.frameless,
+    opacity: prefs.opacity,
+    alwaysOnTop: prefs.alwaysOnTop,
     title: 'DSH Desktop',
     autoHideMenuBar: true,
     // Used by window chrome on win/linux; ignored on macOS (dock icon is set
@@ -694,8 +705,10 @@ function createWindow(port: number): BrowserWindow {
     icon: devIcon(),
     webPreferences: {
       // Capability-scoped preload (src/preload.ts): no generic shell/fs/url
-      // surface reaches the renderer. contextIsolation stays on; sandbox is
-      // off only because the preload bridges rely on main-process modules.
+      // surface reaches the renderer。shell-titlebar-preload 通过 preload.ts
+      // 顶部的 `import './shell-titlebar-preload.js'` 并入（Electron 单窗口仅
+      // 支持一个 preload 文件）。contextIsolation 保持开启；sandbox 关闭仅因
+      // preload 桥依赖主进程模块。
       preload: preloadPath(),
       contextIsolation: true,
       sandbox: false,
@@ -718,7 +731,7 @@ function createWindow(port: number): BrowserWindow {
   // agent tasks keep running in the background (issue #3). Real exit only
   // happens via the tray menu / Cmd+Q, which flips `quitting` first.
   win.on('close', (event) => {
-    if (quitting) return
+    if (quitting || recreating) return
     event.preventDefault()
     win.hide()
   })
@@ -741,6 +754,13 @@ function createWindow(port: number): BrowserWindow {
       appendFileSync(logFile(), `\n=== gpu fallback stable launch probe: level -> ${gpuFallbackState.level} ===\n`)
     }
   })
+  // 外壳控制：UI 就绪后把 frameless 状态推给渲染进程，自绘标题栏据此注入/移除。
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.send('shell:frameless', prefs.frameless)
+  })
+  // 转发原生最大化态到渲染进程（自绘标题栏按钮同步态）。
+  win.on('maximize', () => win.webContents.send('shell:maximized', true))
+  win.on('unmaximize', () => win.webContents.send('shell:maximized', false))
   // Renderer/GPU process loss: take over Electron's default black-screen.
   win.webContents.on('render-process-gone', (event, details) => {
     const reason = details?.reason ?? 'unknown'
@@ -777,6 +797,62 @@ function createWindow(port: number): BrowserWindow {
   })
   void win.loadURL(`http://127.0.0.1:${port}/`)
   return win
+}
+
+/**
+ * 按新外壳偏好重建主窗口（无边框切换时由 shell-control 的 /api/shell/frameless
+ * 回调触发）。销毁前先落盘几何以保留位置/大小，重建后恢复自定义图标。`recreating`
+ * 标志绕过 close-to-tray，避免重建过程中窗口被隐藏到托盘。
+ * @param prefs - 新的外壳偏好
+ */
+function recreateWindow(prefs: ShellPrefs): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    mainWindow = createWindow(serverPort, prefs)
+    ensureShellIconFromMain(mainWindow)
+    return
+  }
+  saveWindowState(mainWindow)
+  recreating = true
+  mainWindow.destroy()
+  recreating = false
+  mainWindow = createWindow(serverPort, prefs)
+  ensureShellIconFromMain(mainWindow)
+}
+
+/**
+ * 外壳控制 IPC 桥：渲染进程里的自绘标题栏（shell-titlebar-preload）通过
+ * `shell:window`（send，无返回）触发 minimize/toggle-maximize/close，通过
+ * `shell:get-state`（invoke，有返回）查询窗口状态。与既有 capability IPC
+ * （window.dshDesktop）互不冲突，仅新增 shell 命名空间。
+ */
+function registerShellIpc(): void {
+  ipcMain.on('shell:window', (_event, msg: unknown) => {
+    const win = mainWindow
+    if (!win || win.isDestroyed()) return
+    const action = msg && typeof msg === 'object' ? (msg as { action?: unknown }).action : undefined
+    if (action === 'minimize') {
+      win.minimize()
+    } else if (action === 'toggle-maximize') {
+      if (win.isMaximized()) win.unmaximize()
+      else win.maximize()
+    } else if (action === 'close') {
+      // close 走既有 close-to-tray 拦截（非 quitting 时隐藏到托盘）。
+      win.close()
+    }
+  })
+  ipcMain.handle('shell:get-state', () => {
+    const win = mainWindow
+    if (!win || win.isDestroyed()) return { ok: false, error: 'window unavailable' }
+    return {
+      bounds: win.getBounds(),
+      maximized: win.isMaximized(),
+      minimized: win.isMinimized(),
+      fullscreen: win.isFullScreen(),
+      alwaysOnTop: win.isAlwaysOnTop(),
+      opacity: win.getOpacity(),
+      frameless: loadPrefs().frameless,
+    }
+  })
 }
 
 /**
@@ -1433,6 +1509,9 @@ let tray: Tray | undefined
 let serverPort = 0
 /** Set only by an explicit quit (tray menu, Cmd+Q); guards the close-to-tray interception. */
 let quitting = false
+/** Set during a shell-control-driven window rebuild, so the old window's close
+ * handler lets it be destroyed instead of hiding to the tray. */
+let recreating = false
 /** Set once the server is ready and the window/tray exist; `activate` before
  * that point would otherwise create a window pointed at a dead port. */
 let booted = false
@@ -1597,7 +1676,10 @@ async function boot(): Promise<void> {
       await waitReady(port, dshChild)
       consecutiveExitFailures = 0
       destroySplash()
-      mainWindow = createWindow(port)
+      const prefs = loadPrefs()
+      mainWindow = createWindow(port, prefs)
+      ensureShellIconFromMain(mainWindow)
+      void startShellControl(() => mainWindow, recreateWindow)
       createTray(port)
       booted = true
       if (attempt > 1) appendFileSync(logFile(), `\n=== boot succeeded after ${attempt - 1} failed attempt(s) ===\n`)
@@ -1681,6 +1763,8 @@ if (!gotLock) {
     // Capability-scoped IPC bridges: register before the window/preload load,
     // so the renderer's `window.dshDesktop` surface is live on first paint.
     registerCapabilityIpcHandlers()
+    // 外壳控制 IPC 桥（自绘标题栏 send/invoke），与 capability 桥共存。
+    registerShellIpc()
     createSplash()
     try {
       await boot()
@@ -1713,6 +1797,7 @@ if (!gotLock) {
   })
   app.on('will-quit', () => {
     tray?.destroy()
+    stopShellControl()
     if (dshChild && dshChild.exitCode === null) dshChild.kill()
   })
 }
