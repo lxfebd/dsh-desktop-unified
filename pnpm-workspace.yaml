@@ -11,6 +11,7 @@ allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': true
   '@google/genai': false
   '@pnpm/exe': true
+  electron: true
   electron-winstaller: true
   esbuild: true
   koffi: true

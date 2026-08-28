@@ -114,17 +114,28 @@ const BROWSE_PICKER_PATCH = `# Force the in-app file-tree picker (pure node:fs) 
       name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
 `
 
+/** Marks a profile patch layer that already carries the browse-picker overlay. */
+const PICKER_PATCH_MARKER = '# dsh-desktop: browse-picker-fallback'
+
 /**
- * On win32, persist the browse-picker overlay into userData and return its
- * path so it can be passed to `dsh web --patch`. Returns `undefined` on every
- * other platform, leaving the native picker (and its better UX) intact.
- * @returns path to the overlay file, or `undefined` when no override is needed
+ * On win32, layer the browse-picker overlay into the web profile's
+ * `cordis.patch.yml` — dsh's own patch layer, applied after every bundle on
+ * each boot. Returns `false` on every other platform, leaving the native
+ * picker (and its better UX) intact.
+ * @returns whether the overlay is in place for the profile dsh is about to load
  */
-function ensurePickerFallbackPatch(): string | undefined {
-  if (process.platform !== 'win32') return undefined
-  const file = join(app.getPath('userData'), 'picker-browse-fallback.yml')
-  writeFileSync(file, BROWSE_PICKER_PATCH, 'utf8')
-  return file
+function ensurePickerFallbackPatch(): boolean {
+  if (process.platform !== 'win32') return false
+  const profileDir = webProfileDir()
+  mkdirSync(profileDir, { recursive: true })
+  const patchPath = join(profileDir, 'cordis.patch.yml')
+  const current = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : PROFILE_PATCH_TEMPLATE
+  if (current.includes(PICKER_PATCH_MARKER)) return true
+  // The template's `[]` is a flow-style empty array; appending sequence items
+  // after it would be invalid YAML, so drop it before layering the entries on.
+  const body = current.replace(/^[ \t]*\[[ \t]*\][ \t]*$/gm, '')
+  writeFileSync(patchPath, `${body.replace(/\s+$/, '')}\n\n${PICKER_PATCH_MARKER}\n${BROWSE_PICKER_PATCH}`, 'utf8')
+  return true
 }
 
 /**
@@ -366,14 +377,10 @@ function startDsh(port: number): ChildProcess {
   // opening the system browser on top of that is a redundant tab per launch.
   args.push('--no-open')
   // win32: the native folder dialog's koffi.node crashes under Electron's ABI
-  // (issue #1), so overlay the pure-JS browse picker instead. --patch must
-  // come BEFORE --port: the web subcommand uses enablePositionalOptions() with
-  // a greedy [args...], so once the unknown option --port starts being
-  // collected as a positional, any later --patch is no longer parsed
-  // (issue #2).
-  const pickerPatch = ensurePickerFallbackPatch()
-  if (pickerPatch) {
-    args.push('--patch', pickerPatch)
+  // (issue #1), so overlay the pure-JS browse picker. `dsh web` has no
+  // `--patch` flag; the overlay goes into the profile's own cordis.patch.yml,
+  // which dsh layers in after every bundle on each boot.
+  if (ensurePickerFallbackPatch()) {
     appendFileSync(log, `=== win32: using browse directory picker (native koffi crashes under Electron ABI; issue #1) ===\n`)
   }
   args.push('--port', String(port))
