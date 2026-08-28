@@ -6,7 +6,7 @@
  * @module dsh-desktop/main
  */
 
-import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, screen, shell } from 'electron'
+import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, screen, shell, ipcMain } from 'electron'
 import type { ChildProcess } from 'node:child_process'
 import { spawn, spawnSync } from 'node:child_process'
 import type { Rectangle } from 'electron'
@@ -15,6 +15,17 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSy
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { delimiter, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { assertCapabilityAllowed, BRIDGE_CHANNELS, type BridgeName } from './capabilities.js'
+import {
+  addExternalTool,
+  connect as connectTool,
+  disconnect as disconnectTool,
+  listTools,
+  projectedTools,
+  removeExternalTool,
+  type ToolConfig,
+} from './external-tools/manager.js'
 import {
   disableEntry,
   enterFullSafeMode,
@@ -515,6 +526,15 @@ function devIcon(): Electron.NativeImage | undefined {
   return existsSync(file) ? nativeImage.createFromPath(file) : undefined
 }
 
+/**
+ * Compiled preload path, sibling to `dist/main.js`. Works in dev and asar.
+ * The preload is capability-scoped (see `src/preload.ts`) — it never grants
+ * generic shell/fs/url access to the renderer.
+ */
+function preloadPath(): string {
+  return fileURLToPath(new URL('./preload.js', import.meta.url))
+}
+
 /** Persisted window geometry, restored on the next launch. */
 interface WindowState {
   x: number
@@ -571,6 +591,91 @@ function saveWindowState(win: BrowserWindow): void {
 }
 
 /**
+ * Capability-scoped IPC bridges (Task 4 & 5). Every handler is generated
+ * from `BRIDGE_CHANNELS` and re-checked by `assertCapabilityAllowed`, so the
+ * exposed surface is exactly the allow-list: desktop preferences, a
+ * read-only log tail, a read-only release listing, and external-tools
+ * management. No shell/fs/url passthrough — a synthesized unknown channel is
+ * rejected before dispatch.
+ * @module dsh-desktop/capability-ipc
+ */
+
+/** Release page used as the read-only GitHub releases source. */
+const RELEASES_API = 'https://api.github.com/repos/deepseekhar/dsh-desktop-unified/releases?per_page=10'
+
+/** File holding desktop preferences, under userData. */
+function prefsFile(): string {
+  return join(app.getPath('userData'), 'desktop-prefs.json')
+}
+
+/** Per-bridge handler tables, generated against the allow-list. */
+const capabilityHandlers: Record<BridgeName, Record<string, (...args: unknown[]) => unknown>> = {
+  desktopPrefs: {
+    get: () => {
+      try {
+        return JSON.parse(readFileSync(prefsFile(), 'utf8'))
+      } catch {
+        return {}
+      }
+    },
+    set: (prefs: unknown) => {
+      writeFileSync(prefsFile(), JSON.stringify(prefs ?? {}, undefined, 2) + '\n', 'utf8')
+    },
+  },
+  logs: {
+    // Read-only tail of the single dsh.log — no arbitrary file path accepted.
+    tail: (bytes: unknown) => {
+      const n = Number(bytes) || 64 * 1024
+      const lp = logFile()
+      return existsSync(lp) ? readFileSync(lp, 'utf8').slice(-n) : ''
+    },
+    reveal: () => shell.showItemInFolder(logFile()),
+  },
+  releases: {
+    // Read-only GitHub releases listing; no arbitrary URL fetch.
+    list: async () => {
+      try {
+        const res = await fetch(RELEASES_API, { headers: { 'User-Agent': 'dsh-desktop' } })
+        if (!res.ok) return []
+        const data = (await res.json()) as Array<{
+          tag_name: string
+          name: string
+          published_at: string
+          html_url: string
+        }>
+        return data.map((r) => ({ tag: r.tag_name, name: r.name, publishedAt: r.published_at, url: r.html_url }))
+      } catch {
+        return []
+      }
+    },
+  },
+  externalTools: {
+    list: () => listTools(),
+    add: (tool: unknown) => addExternalTool(tool as Omit<ToolConfig, 'id' | 'connected'>),
+    remove: (id: unknown) => removeExternalTool(String(id)),
+    connect: (id: unknown) => connectTool(String(id)),
+    disconnect: (id: unknown) => disconnectTool(String(id)),
+    projected: () => projectedTools(),
+  },
+}
+
+/**
+ * Register every whitelisted `bridge:method` handler. Each handler re-checks
+ * the allow-list before dispatch, so the surface cannot grow accidentally.
+ */
+function registerCapabilityIpcHandlers(): void {
+  for (const bridge of Object.keys(BRIDGE_CHANNELS) as BridgeName[]) {
+    for (const method of BRIDGE_CHANNELS[bridge]) {
+      const channel = `${bridge}:${method}`
+      ipcMain.handle(channel, (_event, ...args) => {
+        assertCapabilityAllowed(bridge, method)
+        return capabilityHandlers[bridge][method](...args)
+      })
+    }
+  }
+}
+
+/**
  * Create the single application window pointed at the local server.
  * @param port - port the server bound
  */
@@ -587,6 +692,14 @@ function createWindow(port: number): BrowserWindow {
     // Used by window chrome on win/linux; ignored on macOS (dock icon is set
     // separately at startup).
     icon: devIcon(),
+    webPreferences: {
+      // Capability-scoped preload (src/preload.ts): no generic shell/fs/url
+      // surface reaches the renderer. contextIsolation stays on; sandbox is
+      // off only because the preload bridges rely on main-process modules.
+      preload: preloadPath(),
+      contextIsolation: true,
+      sandbox: false,
+    },
   })
   if (saved?.maximized) win.maximize()
   // Persist geometry (debounced — resize/move fire in bursts) so the next
@@ -725,6 +838,172 @@ function destroySplash(): void {
 }
 
 /**
+ * Explicit failure window, shown after three consecutive child exits. Unlike
+ * the splash (which spins indefinitely while recovery dialogs stack), this
+ * states the failure plainly and offers bounded actions — retry (resets the
+ * counter and re-enters boot), view the log, or quit. Actions are routed via
+ * `dsh-desktop:` pseudo-URLs intercepted in `will-navigate`, so the window
+ * needs no preload of its own.
+ */
+function createFailureWindow(attempt: number): void {
+  destroySplash()
+  const zh = isZhLocale()
+  const title = zh ? '启动失败' : 'Startup Failed'
+  const msg = zh ? `DSH 已连续 ${attempt} 次启动后立即退出。` : `DSH exited immediately ${attempt} times in a row.`
+  const hint = zh
+    ? '可能是插件或安装损坏。可重试、查看日志或退出。'
+    : 'A plugin or the install may be broken. Retry, view the log, or quit.'
+  const retry = zh ? '重试' : 'Retry'
+  const logs = zh ? '查看日志' : 'View log'
+  const quit = zh ? '退出' : 'Quit'
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;
+background:#fff;color:#333;font:14px -apple-system,"Segoe UI",sans-serif;user-select:none}
+@media (prefers-color-scheme:dark){html,body{background:#1e1e1e;color:#ddd}}
+.wrap{text-align:center;line-height:1.8;max-width:320px}
+h1{font-size:16px;margin:0 0 8px}
+p{margin:0 0 18px;opacity:.7;font-size:13px}
+a{display:inline-block;margin:0 6px;padding:8px 16px;border-radius:6px;text-decoration:none;
+color:#fff;background:#4d6bfe;font-size:13px}
+a.log{background:#6b7280}
+a.quit{background:#ef4444}
+</style></head><body><div class="wrap"><h1>${title}</h1><p>${msg}<br>${hint}</p>
+<a href="dsh-desktop:retry">${retry}</a><a class="log" href="dsh-desktop:logs">${logs}</a><a class="quit" href="dsh-desktop:quit">${quit}</a>
+</div></body></html>`
+  failureWindow = new BrowserWindow({
+    width: 420,
+    height: 240,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    frame: false,
+    title: 'DSH Desktop',
+    icon: devIcon(),
+  })
+  secureWindow(failureWindow)
+  void failureWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  failureWindow.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault()
+    const action = url.replace('dsh-desktop:', '')
+    if (action === 'retry') {
+      failureWindow?.destroy()
+      failureWindow = undefined
+      void retryBoot()
+    } else if (action === 'logs') {
+      shell.showItemInFolder(logFile())
+    } else if (action === 'quit') {
+      quitting = true
+      app.quit()
+    }
+  })
+}
+
+/**
+ * Re-enter boot after an explicit failure-retry. Resets the consecutive-exit
+ * counter, recreates the splash, and runs boot again; a second failure simply
+ * re-shows the failure window, so the loop stays bounded and user-driven.
+ */
+async function retryBoot(): Promise<void> {
+  consecutiveExitFailures = 0
+  createSplash()
+  try {
+    await boot()
+  } catch (error) {
+    destroySplash()
+    dialog.showErrorBox(
+      'DSH Desktop 启动失败',
+      `${error instanceof Error ? error.message : String(error)}\n\n日志：${logFile()}`,
+    )
+    app.quit()
+  }
+}
+
+/**
+ * External-tools settings window: lists configured Codex / Claude Code
+ * connections and their connected state, with add / remove / connect /
+ * disconnect. It reuses the capability-scoped preload (externalTools bridge),
+ * so every action is one of the whitelisted channels — no shell/fs passthrough.
+ */
+function createExternalToolsWindow(): void {
+  const zh = isZhLocale()
+  const title = zh ? '外部工具' : 'External Tools'
+  const name = zh ? '名称' : 'Name'
+  const cmd = zh ? '命令' : 'Command'
+  const kind = zh ? '类型' : 'Kind'
+  const status = zh ? '状态' : 'Status'
+  const actions = zh ? '操作' : 'Actions'
+  const connect = zh ? '连接' : 'Connect'
+  const disconnect = zh ? '断开' : 'Disconnect'
+  const remove = zh ? '移除' : 'Remove'
+  const add = zh ? '添加' : 'Add'
+  const codex = zh ? '已连接' : 'Connected'
+  const offline = zh ? '未连接' : 'Offline'
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;padding:16px;font:14px -apple-system,"Segoe UI",sans-serif;color:#333;background:#fff}
+@media (prefers-color-scheme:dark){body{background:#1e1e1e;color:#ddd}}
+table{width:100%;border-collapse:collapse;margin-bottom:12px}
+th,td{border:1px solid #4443;padding:6px 8px;text-align:left;font-size:13px}
+th{background:#0000000a}
+button{padding:4px 10px;margin-right:4px;border:1px solid #888;border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
+@media (prefers-color-scheme:dark){button{background:#2a2a2a;color:#ddd;border-color:#555}}
+.row{display:flex;gap:8px;margin-bottom:12px}
+input,select{padding:5px 8px;border:1px solid #888;border-radius:4px;font-size:13px}
+input[name=name]{width:120px} input[name=command]{flex:1}
+</style></head><body><h2 style="font-size:16px">${title}</h2>
+<div class="row"><input name="name" placeholder="${name}"/>
+<select name="kind"><option value="codex">codex</option><option value="claude-code">claude-code</option></select>
+<input name="command" placeholder="${cmd}"/><button id="add">${add}</button></div>
+<table><thead><tr><th>${name}</th><th>${kind}</th><th>${cmd}</th><th>${status}</th><th>${actions}</th></tr></thead>
+<tbody id="rows"></tbody></table>
+<script>
+var api = window.dshDesktop && window.dshDesktop.externalTools;
+var rows = document.getElementById('rows');
+var addBtn = document.getElementById('add');
+function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+async function render(){
+  if(!api){rows.innerHTML='<tr><td colspan="5">bridge unavailable</td></tr>';return;}
+  var tools = await api.list();
+  var html = tools.length ? tools.map(function(t){
+    var toggle = t.connected ? '${disconnect}' : '${connect}';
+    var st = t.connected ? '${codex}' : '${offline}';
+    return '<tr><td>'+esc(t.name)+'</td><td>'+esc(t.kind)+'</td><td>'+esc(t.command)+'</td>'
+      + '<td>'+st+'</td>'
+      + '<td><button data-id="'+esc(t.id)+'" data-act="toggle">'+toggle+'</button> '
+      + '<button data-id="'+esc(t.id)+'" data-act="remove">${remove}</button></td></tr>';
+  }).join('') : '<tr><td colspan="5" style="opacity:.6">no tools configured</td></tr>';
+  rows.innerHTML = html;
+}
+rows.addEventListener('click', async function(e){
+  var b = e.target.closest('button'); if(!b) return;
+  var id = b.dataset.id;
+  if(b.dataset.act==='remove') await api.remove(id);
+  else if(b.dataset.act==='toggle') await (b.textContent.indexOf('${disconnect}')>=0 ? api.disconnect(id) : api.connect(id));
+  render();
+});
+addBtn.addEventListener('click', async function(){
+  var name = document.querySelector('input[name=name]').value.trim();
+  var command = document.querySelector('input[name=command]').value.trim();
+  var k = document.querySelector('select[name=kind]').value;
+  if(!name || !command) return;
+  await api.add({name:name, kind:k, command:command});
+  document.querySelector('input[name=name]').value='';
+  document.querySelector('input[name=command]').value='';
+  render();
+});
+render();
+</script></body></html>`
+  const win = new BrowserWindow({
+    width: 560,
+    height: 440,
+    title,
+    webPreferences: { preload: preloadPath(), contextIsolation: true, sandbox: false },
+  })
+  secureWindow(win)
+  void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+}
+
+/**
  * Create the system-tray icon with a show/quit menu. The tray owns the app
  * lifecycle once the window is hidden: left-click restores the window,
  * "Quit" is the only path that tears down the dsh child.
@@ -746,8 +1025,8 @@ function createTray(port: number): void {
   // Chinese-first for now.
   const zh = isZhLocale()
   const labels = zh
-    ? { show: '显示 DSH Desktop', update: '检查更新…', logs: '打开日志', data: '打开数据目录', restore: '恢复被禁用的插件并重启', quit: '退出 DSH Desktop' }
-    : { show: 'Show DSH Desktop', update: 'Check for Updates…', logs: 'Open log', data: 'Open data folder', restore: 'Restore disabled plugins and restart', quit: 'Quit DSH Desktop' }
+    ? { show: '显示 DSH Desktop', update: '检查更新…', tools: '外部工具…', logs: '打开日志', data: '打开数据目录', restore: '恢复被禁用的插件并重启', quit: '退出 DSH Desktop' }
+    : { show: 'Show DSH Desktop', update: 'Check for Updates…', tools: 'External Tools…', logs: 'Open log', data: 'Open data folder', restore: 'Restore disabled plugins and restart', quit: 'Quit DSH Desktop' }
   // Recovery actions survive the crash that triggered them, so the restore
   // item is offered whenever the record is non-empty — not only right after
   // a safe-mode boot.
@@ -760,6 +1039,7 @@ function createTray(port: number): void {
       // UI misbehaves, and the data dir holds profiles/sessions/plugins.
       { label: labels.logs, click: () => shell.showItemInFolder(logFile()) },
       { label: labels.data, click: () => void shell.openPath(dshHome()) },
+      { label: labels.tools, click: () => createExternalToolsWindow() },
       ...(recovery
         ? ([
             { type: 'separator' },
@@ -1156,6 +1436,10 @@ let quitting = false
 /** Set once the server is ready and the window/tray exist; `activate` before
  * that point would otherwise create a window pointed at a dead port. */
 let booted = false
+/** Consecutive times the dsh child exited before readiness. 3 => explicit failure. */
+let consecutiveExitFailures = 0
+/** Explicit failure window shown after 3 consecutive exits, replacing the splash. */
+let failureWindow: BrowserWindow | undefined
 /** GPU 沙箱降级状态：启动前从 userData 读入，崩溃时改写。 */
 let gpuFallbackState: GpuFallbackState = defaultGpuFallbackState
 /** 本机这次启动的 Harness 是否已成功渲染过（决定 GPU 丢失是否致命）。 */
@@ -1311,6 +1595,7 @@ async function boot(): Promise<void> {
     dshChild = startDsh(port)
     try {
       await waitReady(port, dshChild)
+      consecutiveExitFailures = 0
       destroySplash()
       mainWindow = createWindow(port)
       createTray(port)
@@ -1322,6 +1607,19 @@ async function boot(): Promise<void> {
         logFile(),
         `\n=== boot attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)} ===\n`,
       )
+      // A child that exits before readiness (non-null exit code) counts toward
+      // the consecutive-failure threshold; a hung child (readiness timeout
+      // without exit) does not, since it never got far enough to "fail fast".
+      const exitedImmediately = dshChild.exitCode !== null
+      if (exitedImmediately) {
+        consecutiveExitFailures++
+        appendFileSync(logFile(), `=== consecutive exit failures: ${consecutiveExitFailures} ===\n`)
+        if (consecutiveExitFailures >= 3) {
+          appendFileSync(logFile(), `=== giving up the recovery loop after ${consecutiveExitFailures} consecutive exits; showing failure window ===\n`)
+          createFailureWindow(consecutiveExitFailures)
+          return
+        }
+      }
       // A hung child (readiness timeout without exit) still holds its port.
       if (dshChild.exitCode === null) dshChild.kill()
       if (!(await proposeRecovery(attempt, tried))) throw error
@@ -1380,6 +1678,9 @@ if (!gotLock) {
     if (icon && process.platform === 'darwin') app.dock?.setIcon(icon)
     setupAppMenu()
     setupAutoUpdate()
+    // Capability-scoped IPC bridges: register before the window/preload load,
+    // so the renderer's `window.dshDesktop` surface is live on first paint.
+    registerCapabilityIpcHandlers()
     createSplash()
     try {
       await boot()
