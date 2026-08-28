@@ -1,0 +1,26 @@
+# Hoisted (npm-style) layout so electron-builder can traverse the dependency
+# tree through a flat node_modules instead of pnpm's virtual-store symlinks.
+#
+# NOTE: hoisting alone does NOT make electron-builder collect peer dependencies
+# — its production collector only reads `dependencies`/`optionalDependencies`
+# (app-builder-lib nodeModulesCollector.isProdDependency). The @deepseek-ai/*
+# runtime packages that dsh declares only as peers are therefore listed
+# explicitly in package.json `dependencies`, kept in sync by sync-upstream.mjs.
+nodeLinker: hoisted
+allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': false
+  '@pnpm/exe': true
+  electron-winstaller: true
+  esbuild: true
+  koffi: true
+  node-pty: true
+  protobufjs: false
+# This repo exists to track @deepseek-ai/dsh releases within hours, so the
+# whole first-party scope is exempt from the 24h minimum-release-age check.
+# Pinning name@version entries here instead breaks on every upstream bump:
+# the sync script rewrites package.json/lockfile but not this list, and the
+# stale pins let fresh upstream releases fail CI (rc.6 pins vs rc.7 packages).
+# Everything outside the scope keeps the default protection.
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/*'

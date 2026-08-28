@@ -1,0 +1,187 @@
+name: sync-and-release
+
+# Polls npm for a new @deepseek-ai/dsh release and publishes signed-less
+# macOS/Windows installers to GitHub Releases. A build happens when ANY of:
+#   - upstream moved (any dist-tag carries a higher version than the pinned one)
+#   - the repo itself has commits since the last release tag
+#   - the latest tag was orphaned by a failed build (no release attached)
+#   - a manual run asks for it via the `force` input
+# One workflow by design: a tag pushed with GITHUB_TOKEN would not trigger a
+# second workflow.
+
+on:
+  schedule:
+    # 09:00 / 13:00 / 17:00 Beijing time (UTC+8), three builds a day.
+    - cron: '0 1,5,9 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebuild even when upstream is unchanged'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-and-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      version: ${{ steps.sync.outputs.version }}
+      upstream_version: ${{ steps.sync.outputs.upstream_version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history + tags: the repo-change check below diffs HEAD
+          # against the latest release tag.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A build is also wanted when the repo itself moved since the last
+          # release tag, or when a tag was orphaned by a failed build (its
+          # release never landed) — not only when upstream published something.
+          latest_tag=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          repo_changed=false
+          orphan=false
+          if [ -z "$latest_tag" ]; then
+            repo_changed=true # no release tag yet
+          elif [ "$(git rev-list --count "${latest_tag}..HEAD")" -gt 0 ]; then
+            repo_changed=true
+          elif ! gh release view "$latest_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            orphan=true # tag was pushed but its build/release failed
+          fi
+          echo "latest_tag=${latest_tag:-<none>} repo_changed=$repo_changed orphan=$orphan"
+
+          args=()
+          if [ "${{ inputs.force }}" = "true" ] || [ "$repo_changed" = true ] || [ "$orphan" = true ]; then
+            args+=(--force)
+          fi
+          node scripts/sync-upstream.mjs "${args[@]}"
+
+      - name: Refresh lockfile for the new upstream version
+        if: steps.sync.outputs.changed == 'true'
+        run: pnpm install --lockfile-only
+
+      - name: Commit, tag, and push the bump
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "${{ steps.sync.outputs.upstream_changed }}" = "true" ]; then
+            msg="chore(sync): @deepseek-ai/dsh ${{ steps.sync.outputs.upstream_version }}"
+          else
+            msg="chore(release): rebuild @deepseek-ai/dsh ${{ steps.sync.outputs.upstream_version }}"
+          fi
+          git add package.json pnpm-lock.yaml
+          git commit -m "$msg"
+          git tag "v${{ steps.sync.outputs.version }}"
+          git push origin HEAD:master --tags
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            builder-flag: --mac
+          - os: windows-latest
+            builder-flag: --win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/v${{ needs.sync.outputs.version }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run build
+
+      - name: Smoke-test the pinned upstream (boot dsh web, probe readiness)
+        run: node scripts/ci-smoke.mjs
+
+      - name: Build installer (no publish — release is assembled below to avoid
+          parallel-build race on the same tag)
+        run: pnpm exec electron-builder ${{ matrix.builder-flag }} --publish never
+        env:
+          # Unsigned on purpose (no Apple Developer / code-signing budget):
+          # installers show the platform's unknown-developer warning.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            dist-installer/*.dmg
+            dist-installer/*.zip
+            dist-installer/*.exe
+            dist-installer/*.blockmap
+            dist-installer/latest*.yml
+          if-no-files-found: error
+
+  release:
+    needs: [sync, build]
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create published release with all installers
+        run: |
+          # Checksum manifest: lets users verify downloads against the
+          # release assets themselves.
+          (cd artifacts && find . -type f | sed 's|^\./||' | sort | xargs shasum -a 256) > SHA256SUMS
+          mapfile -t files < <(find artifacts -type f | sort)
+          files+=("SHA256SUMS")
+          cat > notes.md <<'EOF'
+          **English**
+
+          Built on [@deepseek-ai/dsh UPSTREAM_VERSION](https://www.npmjs.com/package/@deepseek-ai/dsh/v/UPSTREAM_VERSION). Unsigned build:
+
+          - **macOS**: confirm via right-click → Open. If it says "damaged and can't be opened", run: `xattr -cr "/Applications/DSH Desktop.app"`
+          - **Windows**: SmartScreen prompt → More info → Run anyway.
+
+          **中文**
+
+          基于 [@deepseek-ai/dsh UPSTREAM_VERSION](https://www.npmjs.com/package/@deepseek-ai/dsh/v/UPSTREAM_VERSION) 构建。未签名版本：
+
+          - **macOS**：首次打开请右键 → 打开；若提示「已损坏，无法打开」，请执行：`xattr -cr "/Applications/DSH Desktop.app"`
+          - **Windows**：SmartScreen 提示 → 更多信息 → 仍要运行。
+          EOF
+          sed -i "s/UPSTREAM_VERSION/${{ needs.sync.outputs.upstream_version }}/g" notes.md
+          gh release create "v${{ needs.sync.outputs.version }}" \
+            --repo foolgry/dsh-desktop \
+            --title "v${{ needs.sync.outputs.version }}" \
+            --notes-file notes.md \
+            "${files[@]}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

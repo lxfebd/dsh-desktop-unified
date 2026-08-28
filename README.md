@@ -1,0 +1,104 @@
+# DSH Desktop
+
+[English](README.en.md) | 中文
+
+DeepSeek Harness 的**桌面安装版**——下载安装即用，无需安装 Node.js、无需使用 npm、无需打开终端。安装后打开应用，在界面里填入你的 DeepSeek API Key，就能开始让 AI 帮你跑任务（读写文件、执行命令、写代码、自动化操作等）。
+
+如果你在找「DeepSeek 桌面版」「DeepSeek 客户端下载」「DeepSeek Agent 电脑版」，这就是为你准备的。支持 macOS（Apple Silicon）和 Windows，安装包见下方 Releases。
+
+> ⚠️ **这是社区（非官方）构建**。上游 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 采用 MIT 协议开源，本仓库只是 Electron 桌面外壳和自动打包脚本，不是 DeepSeek 官方产品。DeepSeek 的名称和鲸鱼 Logo 为 DeepSeek 的商标，此处仅用于标识所打包的上游软件。
+
+📖 **文档站**：[foolgry.github.io/dsh-desktop/zh](https://foolgry.github.io/dsh-desktop/zh/) —— 遇到问题或有建议？欢迎到 [Issues](https://github.com/foolgry/dsh-desktop/issues) 反馈。
+
+## 下载安装
+
+到 [Releases](https://github.com/foolgry/dsh-desktop/releases) 页面下载最新版本：
+
+- **macOS（Apple Silicon / M 系列芯片）**：推荐用 Homebrew 安装，一条命令搞定（`xattr -cr` 清除未公证应用的隔离属性，避免「已损坏」提示；后续还能在 App 内一键更新，见下）：
+  ```sh
+  brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+  ```
+  也可以下载 `DSH-Desktop-*-mac-arm64.dmg` 手动安装：未签名，首次打开如果提示"无法验证开发者"，**右键点应用 → 打开**；若提示「已损坏」，在终端执行一次上面的 `xattr` 命令即可。
+- **Windows（64 位）**：下载 `DSH-Desktop-*-win-x64-setup.exe`
+  - SmartScreen 会提示风险：点 **更多信息 → 仍要运行**
+
+每个 Release 附带 `SHA256SUMS` 校验清单，可用于验证安装包完整性。
+
+<details>
+<summary><strong>下载慢或无法访问 GitHub？</strong></summary>
+
+可以给下载链接加一个 GitHub 加速前缀（如 `https://ghfast.top/`）用浏览器下载；Homebrew 用户可以经加速前缀把安装包下载到 brew 缓存后正常安装，sha256 校验照常执行：
+
+```sh
+curl -L -o "$(brew --cache --cask foolgry/tap/dsh-desktop)" \
+  "https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<版本>-mac-arm64.dmg"
+brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+```
+
+加速域名是第三方公共服务，会不定期失效，换一个当时可用的即可；完整性与下载途径无关（`SHA256SUMS` + cask 内置 sha256 校验）。详见[文档站](https://foolgry.github.io/dsh-desktop/zh/guide/getting-started.html)。
+
+</details>
+
+应用启动时会自动检查更新（每 4 小时一次），也可以随时手动触发：macOS 点菜单栏「DSH Desktop → 检查更新…」，Windows 按 Alt 显示窗口菜单后点「帮助 → Check for Updates…」，或右键托盘图标选「检查更新…」：
+
+- **Windows**：后台自动下载，弹窗点「Restart and update」即重启完成更新；不点也会在下次退出应用时自动安装
+- **macOS**（未签名，无法自我更新）：弹窗提示更新。如果是用 Homebrew 安装的，点「Update via Homebrew」会自动执行 `brew upgrade --cask dsh-desktop` + `xattr -cr` 并重启完成更新；否则点按钮跳转到 Releases 页手动下载
+
+## 使用
+
+1. 安装后打开 **DSH Desktop**
+2. 在界面的设置里填入你的 [DeepSeek API Key](https://platform.deepseek.com/)（和网页版操作一样）
+3. 开始对话，让 AI 帮你完成任务
+
+你的数据（对话、配置、会话）存在系统应用数据目录，不会污染你的用户目录。日志在同目录的 `logs/dsh.log`，日志和数据目录都可以从托盘菜单直接打开。
+
+## 它是怎么工作的
+
+- 应用内置了 Electron 自带的 Node.js 运行时和官方发布的 [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) 包，**不会在你的系统里安装任何东西**；插件市场在线安装插件由内置的独立版 pnpm 完成，同样无需系统 Node / npm / Homebrew
+- 启动时在本机回环地址起一个 `dsh web` 服务（默认 3080 端口，被占用则自动用 3081、3082…），只监听 `127.0.0.1`，不对外暴露
+- 用原生窗口加载这个界面，体验和桌面软件一致
+- **关闭窗口不会退出应用**：点 × 只是最小化到系统托盘，正在运行的任务继续在后台执行；点托盘图标（或菜单里的「Show DSH Desktop」）可重新打开窗口，彻底退出请用托盘菜单的「Quit」（或 macOS 的 Cmd+Q）
+
+## 我们刻意不做什么
+
+边界和功能同样重要。这个项目刻意保持为「官方 UI 的极简桌面壳」：
+
+- **不改上游、不 fork**：始终运行官方发布的 `@deepseek-ai/dsh` 并每天自动跟进新版本——你得到的是与 CLI 用户完全一致的最新官方能力，而不是一个被二次修改后逐渐过期的分叉
+- **不重做界面**：窗口里就是官方 Web UI 原样。皮肤、终端、侧边栏等增强属于插件生态（应用内已内置插件市场），由你自行选择安装，而不是由桌面壳替你决定
+- **不往系统里装东西**：不安装 Node、不修改 PATH、不写系统配置；一切都在应用自己的数据目录里，卸载即净
+- **不锁版本**：没有「固定在某个旧版本」的选项。上游某个版本出了问题，通常一天内就有修复构建；急用可暂时切回 CLI
+
+如果你需要内置终端、换肤、多版本管理等深度定制，社区里有更重的客户端（如 [EAC](https://github.com/zouyuxuan122/Deepseek-Harness-EAC)、[anywhere-labs 的 DSH Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop) 等），各有所长，按需选择。
+
+## 自动同步与打包
+
+[sync-and-release.yml](.github/workflows/sync-and-release.yml) 在**北京时间每天 9:00 / 13:00 / 17:00** 自动运行：
+
+1. 检查 npm 上 `@deepseek-ai/dsh` 是否有新版本；没有则跳过
+2. 有新版本就更新依赖、打 tag、构建 macOS（dmg + zip）和 Windows（nsis）安装包，发布到 Releases
+
+桌面版版本号跟随上游：`0.1.0-rc.6.6` 表示"基于上游 `0.1.0-rc.6` 的第 6 个桌面构建"。
+
+## 微信交流群
+
+使用上有问题、想提建议，欢迎扫码进群交流：
+
+<img src="assets/wechat-group.jpg" alt="dsh desktop 微信交流群二维码" width="260" />
+
+> 微信群二维码 7 天内有效。如果扫码提示已过期，请到 [Issues](https://github.com/foolgry/dsh-desktop/issues) 留言，我们会更新二维码。
+
+## 本地开发
+
+需要 Node.js `^22.19 || >=24`、[pnpm](https://pnpm.io)、[just](https://just.systems)。
+
+```sh
+just install    # 安装依赖
+just dev        # 编译并以源码方式启动应用
+just sync       # 检查上游新版本并更新
+just dist-mac   # 构建 macOS 安装包到 dist-installer/
+just dist-win   # 构建 Windows 安装包（在 Windows/CI 上）
+```
+
+## 许可证
+
+桌面外壳代码：MIT。DeepSeek Harness 本体为 MIT © DeepSeek；打包的第三方依赖见上游 `THIRD_PARTY_NOTICES.md`。

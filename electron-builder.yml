@@ -1,0 +1,43 @@
+appId: com.foolgry.dshdesktop
+productName: DSH Desktop
+copyright: MIT
+
+directories:
+  output: dist-installer
+
+files:
+  - dist/**
+  - node_modules/**
+  - package.json
+
+# The dsh CLI entry is spawned as a child process; asar archives are not
+# executable paths, so the runtime tree must stay on disk.
+asarUnpack:
+  - node_modules/**
+
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.icns
+  target:
+    - dmg
+    - zip # required by electron-updater on macOS
+  # No ${productName} here: the space in "DSH Desktop" makes electron-builder
+  # write a dashed safeArtifactName into latest-mac.yml while gh release upload
+  # turns the space into a dot — the updater's download URL then 404s.
+  artifactName: DSH-Desktop-${version}-mac-arm64.${ext}
+
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+  artifactName: DSH-Desktop-${version}-win-x64-setup.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: DSH Desktop
+
+publish:
+  provider: github
+  owner: foolgry
+  repo: dsh-desktop
