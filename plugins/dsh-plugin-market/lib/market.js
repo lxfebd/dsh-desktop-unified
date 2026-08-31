@@ -69,6 +69,22 @@ export const OFFICIAL_CATALOG = [
     desc: '让 AI 在对话里自行定义/运行 Cordis 插件的模型侧工具，即"创造模式/自定义模式"的核心能力。',
     type: 'npm', bundle: false,
   },
+  {
+    id: 'dsh-theme',
+    name: 'dsh-theme',
+    source: 'dsh-theme',
+    desc: '内置 30 款主题包（Apache-2.0）· 零依赖一键换肤',
+    type: 'npm', bundle: true, theme: true, builtin: true,
+    category: '主题与外观',
+  },
+  {
+    id: 'dsh-compact-after-task',
+    name: '@xiaobanli/dsh-compact-after-task',
+    source: '@xiaobanli/dsh-compact-after-task',
+    desc: '任务完成后自动压缩会话（MIT）· 省 token 免手动',
+    type: 'npm', bundle: true, builtin: true,
+    category: '性能优化',
+  },
 ]
 
 // ---- 小工具 ----
@@ -1220,7 +1236,7 @@ export function listDisabled() {
 // ============================================================
 // 主题系统：cordis.patch.yml 的 disabled 标记控制主题启停，切换后重启 dsh 生效
 // ============================================================
-const PATCH_FILE = () => join(RUNTIME.dshHome, 'profiles', 'web', 'cordis.patch.yml')
+const PATCH_FILE = () => join(RUNTIME.dshHome, 'profiles', RUNTIME.profile, 'cordis.patch.yml')
 const THEME_STATE = () => join(DATA_DIR(), 'theme-state.json')
 
 function loadThemeState() {
@@ -1312,14 +1328,25 @@ function writePatchDisabled(id, disabled) {
 /** 从注册表中的 theme 分类提取主题插件列表（复用社区目录数据） */
 export async function themeCatalog(force) {
   const snap = await communityCatalog(force)
-  const themes = (snap.items || []).filter((it) => it.category === '主题与外观')
+  const communityThemes = (snap.items || []).filter((it) => it.category === '主题与外观')
   const state = loadThemeState()
-  const info = readInstalled('web')
+  const info = readInstalled(RUNTIME.profile)
+  // 内置主题（OFFICIAL_CATALOG 中 category=主题与外观 的条目）无条件出现在面板，
+  // 不依赖社区目录拉取；source/type 与社区条目同构，安装走同一 submitOp 链路。
+  const builtinThemes = OFFICIAL_CATALOG
+    .filter((it) => it.category === '主题与外观')
+    .map((it) => ({
+      id: it.id, name: it.name, url: '', page: '', category: '主题与外观',
+      source: it.source, desc: it.desc, npm: it.source, stars: 0, downloads: 0,
+      install: it.source || '', added: '', owner: '', deprecated: false,
+      replacement: null, community: false, builtin: true, type: it.type || 'npm',
+    }))
+  const themes = [...communityThemes, ...builtinThemes]
   // 过滤掉非主题插件：只有注入 @deepseek-ai/dsh-client-ui-theme 的才是真主题
   // dsh-diorama 等角色皮肤插件虽有 category=主题与外观 但不是 UI 主题
   var realThemes = themes.filter(function (it) {
     var pkgName = it.name || it.npm || ''
-    var pkgFile = join(RUNTIME.dshHome, 'profiles', 'web', 'node_modules', pkgName, 'package.json')
+    var pkgFile = join(RUNTIME.dshHome, 'profiles', RUNTIME.profile, 'node_modules', pkgName, 'package.json')
     if (!existsSync(pkgFile)) return true // 未安装的保留
     try {
       var pkg = JSON.parse(readFileSync(pkgFile, 'utf8'))
@@ -1475,7 +1502,7 @@ export function restartDsh() {
 
 /** 确保主题可作为 dsh bundle 加载：给 package.json 加 dsh.bundle.patch + 创建 insert 格式 patch 文件 */
 function ensureBundleable(themeName) {
-  const profileDir = join(RUNTIME.dshHome, 'profiles', 'web')
+  const profileDir = join(RUNTIME.dshHome, 'profiles', RUNTIME.profile)
   const modDir = join(profileDir, 'node_modules', themeName)
   const pkgFile = join(modDir, 'package.json')
   if (!existsSync(pkgFile)) return false
@@ -1509,7 +1536,7 @@ function ensureBundleable(themeName) {
 
 /** 在主题的 bundle 级 cordis.patch.yml 中设置 disabled 状态（insert 条目内的 disabled 字段） */
 function setThemeBundleDisabled(themeName, disabled) {
-  const patchFile = join(RUNTIME.dshHome, 'profiles', 'web', 'node_modules', themeName, 'cordis.patch.yml')
+  const patchFile = join(RUNTIME.dshHome, 'profiles', RUNTIME.profile, 'node_modules', themeName, 'cordis.patch.yml')
   if (!existsSync(patchFile)) return false
   try {
     // 统一去除行尾 \r（CRLF 文件会导致 $ 锚定失败，正则匹配不到 id 行）
@@ -1565,7 +1592,7 @@ function setThemeBundleDisabled(themeName, disabled) {
 
 /** 读取主题的 bundle 级 cordis.patch.yml 中的 disabled 状态 */
 function readThemeBundleDisabled(themeName) {
-  const patchFile = join(RUNTIME.dshHome, 'profiles', 'web', 'node_modules', themeName, 'cordis.patch.yml')
+  const patchFile = join(RUNTIME.dshHome, 'profiles', RUNTIME.profile, 'node_modules', themeName, 'cordis.patch.yml')
   if (!existsSync(patchFile)) return false
   try {
     const text = readFileSync(patchFile, 'utf8').replace(/\r\n/g, '\n')

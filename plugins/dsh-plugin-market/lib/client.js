@@ -118,6 +118,7 @@ window.__ModuleLoader__.load({
 			themeSwitch: "启用主题",
 			themeSwitching: "切换中…",
 			themeHint: "切换主题后将自动重启 dsh 使其生效，请稍候片刻。",
+			themeCredit: "版权注记：内置主题包 dsh-theme 采用 Apache-2.0 许可（随桌面壳打包分发）；社区主题版权归原作者所有，请以各插件仓库许可证为准。",
 			themeInstallFirst: "先在社区页搜索并安装主题插件，再回来启用",
 			refreshThemes: "刷新主题",
 			themeRules: "切换规则",
@@ -156,6 +157,7 @@ window.__ModuleLoader__.load({
 			loading: "Loading…",
 			search: "Search plugins…",
 			themeNotInstalled: "Not installed",
+			themeCredit: "Attribution: built-in theme pack dsh-theme is Apache-2.0 licensed (bundled with the desktop shell); community themes belong to their authors — check each plugin repo's license.",
 			all: "All",
 			core: "Core",
 			tools: "Tools",
@@ -1161,7 +1163,10 @@ window.__ModuleLoader__.load({
 				) : null,
 				React.createElement("div", {
 					style: { fontSize: 11, color: T.t, lineHeight: 16, flex: "none", opacity: 0.5, textAlign: "right", maxWidth: 760, alignSelf: "flex-end" }, dangerouslySetInnerHTML: { __html: t("themeHint") },
-				})
+				}),
+				React.createElement("div", {
+					style: { fontSize: 11, color: T.t, lineHeight: 16, flex: "none", opacity: 0.45, textAlign: "right", maxWidth: 760, alignSelf: "flex-end" },
+				}, t("themeCredit"))
 			);
 		}
 

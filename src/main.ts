@@ -6,7 +6,7 @@
  * @module dsh-desktop/main
  */
 
-import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, screen, shell, ipcMain } from 'electron'
+import { app, BrowserWindow, Menu, Tray, dialog, nativeImage, Notification, screen, shell, ipcMain } from 'electron'
 import type { ChildProcess } from 'node:child_process'
 import { spawn, spawnSync } from 'node:child_process'
 import type { Rectangle } from 'electron'
@@ -38,6 +38,7 @@ import {
 } from './safe-mode.js'
 import { latestSnapshot, restoreSnapshot } from './plugin-recovery-restore.js'
 import { activeProfile, ensureProfileSeed, PROFILES, setActiveProfile, type ProfileName } from './profiles.js'
+import { createSessionNotifier } from './session-notifier.js'
 import {
   defaultGpuFallbackState,
   gpuFallbackStateEquals,
@@ -1691,6 +1692,8 @@ function setupAutoUpdate(): void {
 let dshChild: ChildProcess | undefined
 let mainWindow: BrowserWindow | undefined
 let tray: Tray | undefined
+/** 会话完成通知轮询器；boot 成功后启动，退出时停止。 */
+let sessionNotifier: ReturnType<typeof createSessionNotifier> | undefined
 /** Port the dsh server bound; kept so hidden-window restores can recreate the window. */
 let serverPort = 0
 /**
@@ -1926,6 +1929,7 @@ async function boot(): Promise<void> {
       void startShellControl(() => mainWindow, recreateWindow)
       createTray(port)
       booted = true
+      startSessionNotifier()
       if (attempt > 1) appendFileSync(logFile(), `\n=== boot succeeded after ${attempt - 1} failed attempt(s) ===\n`)
       return
     } catch (error) {
@@ -1951,6 +1955,35 @@ async function boot(): Promise<void> {
       if (!(await proposeRecovery(attempt, tried))) throw error
     }
   }
+}
+
+/**
+ * 会话完成系统通知：dsh 进程无 stdout 完成标记（0.1.2-alpha），以会话文件
+ * mtime 活跃窗口判定「最近活跃后静默完成」。通知点击聚焦主窗口。
+ * 轮询器生命周期随 app 一次启动一次；quit 时在 will-quit 停止。
+ */
+function startSessionNotifier(): void {
+  if (sessionNotifier !== undefined) return
+  if (!Notification.isSupported()) return
+  const notifier = createSessionNotifier({ dshHome: dshHome() })
+  notifier.onDone = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    const n = new Notification({
+      title: isZhLocale() ? '会话任务已完成' : 'Session task finished',
+      body: isZhLocale() ? '点击回到 DeepSeek Harness 查看结果。' : 'Click to return to DeepSeek Harness and view the result.',
+    })
+    n.on('click', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        if (!mainWindow.isVisible()) mainWindow.show()
+        mainWindow.focus()
+      }
+    })
+    n.show()
+  }
+  notifier.start()
+  sessionNotifier = notifier
+  appendFileSync(logFile(), `\n=== session completion notifier started ===\n`)
 }
 
 const gotLock = app.requestSingleInstanceLock()
@@ -2042,6 +2075,8 @@ if (!gotLock) {
   app.on('will-quit', () => {
     tray?.destroy()
     stopShellControl()
+    sessionNotifier?.stop()
+    sessionNotifier = undefined
     if (dshChild && dshChild.exitCode === null) dshChild.kill()
   })
 }
