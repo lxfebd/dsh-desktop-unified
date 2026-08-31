@@ -23,6 +23,7 @@ export const RUNTIME = {
   dshHome: process.env.DSH_HOME || detectDshHome(),
   nodeBin: process.execPath,
   dshBin: typeof process.argv[1] === 'string' && process.argv[1] ? process.argv[1] : '',
+  profile: process.env.DSH_DESKTOP_PROFILE || 'web',
 }
 
 const DATA_DIR = () => join(RUNTIME.dshHome, 'storages', 'dsh-plugin-market')
@@ -164,7 +165,7 @@ export function extractBlockedPkg(output) {
 
 export async function runDshPlugin(profile, action, source, mirror) {
   if (action === 'install' || action === 'upgrade') {
-    snapshotProfileState({ dshHome: RUNTIME.dshHome, profile: profile || 'web' })
+    snapshotProfileState({ dshHome: RUNTIME.dshHome, profile: profile || RUNTIME.profile })
   }
   const cwd = join(RUNTIME.dshHome, 'profiles', profile)
   let result = await runOnce(profile, action, source, mirror, cwd)

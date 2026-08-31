@@ -18,7 +18,7 @@ export const name = 'dsh-plugin-market'
 /** 前置服务：webServer 提供后方可注册路由与注入；tools 供 AI 在市场里自拉插件。 */
 export const inject = ['webServer', 'tools']
 
-const PROFILE_DEFAULT = 'web'
+const PROFILE_DEFAULT = RUNTIME.profile
 
 // 模块级社区缓存：catalog 走瞬时值，/community 负责拉取/刷新。
 let communityItems = []
@@ -445,7 +445,7 @@ export function apply(ctx) {
         const body = await readBody(req)
         const target = (body.target || '').trim()
         if (!target) return sendJson(res, 400, { ok: false, error: '缺少 target' })
-        return sendJson(res, 200, switchTheme('web', target))
+        return sendJson(res, 200, switchTheme(PROFILE_DEFAULT, target))
       }
       const force = new URL(req.url ?? '/', 'http://x').searchParams.get('force') === '1'
       return sendJson(res, 200, await themeCatalog(force))
@@ -483,39 +483,39 @@ export function apply(ctx) {
     // ---- 扩展能力 ----
     // GET /api/market/updates  → 每插件更新检测
     disposers.push(ctx.webServer.register(route('/api/market/updates', safe(async (req, res) => {
-      return sendJson(res, 200, { ok: true, updates: await checkPluginUpdates('web') })
+      return sendJson(res, 200, { ok: true, updates: await checkPluginUpdates(PROFILE_DEFAULT) })
     }))))
 
     // POST /api/market/backup  → 备份当前配置
     // POST /api/market/restore → 恢复配置
     disposers.push(ctx.webServer.register(route('/api/market/backup', safe((req, res) => {
-      return sendJson(res, 200, backupProfile('web'))
+      return sendJson(res, 200, backupProfile(PROFILE_DEFAULT))
     }))))
     disposers.push(ctx.webServer.register(route('/api/market/restore', safe(async (req, res) => {
       const body = await readBody(req)
       if (!body || !body.backup) return sendJson(res, 400, { ok: false, error: '缺少 backup 字段' })
-      return sendJson(res, 200, restoreProfile('web', body.backup))
+      return sendJson(res, 200, restoreProfile(PROFILE_DEFAULT, body.backup))
     }))))
 
     // GET /api/market/snapshot → 触发装前快照（返回本次快照元信息），供 UI/守卫触发快照
     disposers.push(ctx.webServer.register(route('/api/market/snapshot', safe((req, res) => {
-      const snap = snapshotProfileState({ dshHome: RUNTIME.dshHome, profile: 'web' })
+      const snap = snapshotProfileState({ dshHome: RUNTIME.dshHome, profile: RUNTIME.profile })
       return sendJson(res, 200, { ok: true, id: snap.id, exportedAt: snap.exportedAt, bundles: snap.bundles })
     }))))
 
     // GET /api/market/diagnose  → 诊断面板
     disposers.push(ctx.webServer.register(route('/api/market/diagnose', safe((req, res) => {
-      return sendJson(res, 200, diagnoseProfile('web'))
+      return sendJson(res, 200, diagnoseProfile(PROFILE_DEFAULT))
     }))))
 
     // GET /api/market/agent-running → 检查 agent 是否运行中
     disposers.push(ctx.webServer.register(route('/api/market/agent-running', safe((req, res) => {
-      return sendJson(res, 200, { ok: true, ...isAgentRunning('web') })
+      return sendJson(res, 200, { ok: true, ...isAgentRunning(PROFILE_DEFAULT) })
     }))))
 
     // POST /api/market/clean-store  → 清理孤儿 store
     disposers.push(ctx.webServer.register(route('/api/market/clean-store', safe((req, res) => {
-      return sendJson(res, 200, cleanOrphanStore('web'))
+      return sendJson(res, 200, cleanOrphanStore(PROFILE_DEFAULT))
     }))))
 
     // GET /api/market/error-hint?key=ERR_PNPM_...&locale=zh → pnpm 错误双语提示

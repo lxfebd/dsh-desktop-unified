@@ -37,6 +37,7 @@ import {
   restoreAll,
 } from './safe-mode.js'
 import { latestSnapshot, restoreSnapshot } from './plugin-recovery-restore.js'
+import { activeProfile, ensureProfileSeed, PROFILES, setActiveProfile, type ProfileName } from './profiles.js'
 import {
   defaultGpuFallbackState,
   gpuFallbackStateEquals,
@@ -99,9 +100,9 @@ function dshHome(): string {
   return join(app.getPath('userData'), 'dsh-home')
 }
 
-/** The web profile directory, where user-installed plugins are registered. */
+/** The active profile's directory, where user-installed plugins are registered. */
 function webProfileDir(): string {
-  return join(dshHome(), 'profiles', 'web')
+  return join(dshHome(), 'profiles', activeProfile())
 }
 
 /** Recovery-action record consumed by the tray's restore menu item. */
@@ -252,9 +253,9 @@ const PRESET_PLUGINS = [
  */
 const WEB_PROFILE_TEMPLATE = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
 
-/** Marker recording that the preset plugins were already applied. */
+/** Marker recording that the preset plugins were already applied for a profile. */
 function presetMarkerFile(): string {
-  return join(dshHome(), '.bundled-plugins-preset')
+  return join(dshHome(), `.bundled-plugins-preset-${activeProfile()}`)
 }
 
 /** Profile manifest shape (the parts presetting touches). */
@@ -341,7 +342,7 @@ function presetBundledPlugins(): void {
       const version = (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: string }).version ?? '0.0.0'
       return { name, dir, version }
     })
-    const profileDir = join(dshHome(), 'profiles', 'web')
+    const profileDir = join(dshHome(), 'profiles', activeProfile())
     const manifestPath = join(profileDir, 'package.json')
     mkdirSync(profileDir, { recursive: true })
     let manifest: ProfileManifest
@@ -578,7 +579,9 @@ function startDsh(port: number): ChildProcess {
   let stdoutTextBuf = ''
   // --expose-internals is required by cordis-plugin-hmr's HMR service, which
   // ships in the base profile and reads Node internals unavailable by default.
-  const args = ['--expose-internals', dshBin(), 'web']
+  // `dsh --profile <name>` boots the named profile; `dsh web` is a hardcoded
+  // alias for `--profile web`, but only `--profile` works for custom profiles.
+  const args = ['--expose-internals', dshBin(), '--profile', activeProfile()]
   // The shell loads the UI in its own window; dsh's default behavior of
   // opening the system browser on top of that is a redundant tab per launch.
   args.push('--no-open')
@@ -596,6 +599,7 @@ function startDsh(port: number): ChildProcess {
       PATH: `${toolingPathPrefix()}${process.env.PATH ?? ''}`,
       ELECTRON_RUN_AS_NODE: '1',
       DSH_HOME: dshHome(),
+      DSH_DESKTOP_PROFILE: activeProfile(),
       DSH_TELEMETRY_DISABLED: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -1286,6 +1290,23 @@ function createTray(port: number): void {
           ] as const)
         : []),
       { label: isZhLocale() ? '回滚到上次良好状态' : 'Restore last good state', click: () => void restoreLastGoodAndRelaunch() },
+      {
+        label: isZhLocale() ? '档案' : 'Profile',
+        submenu: PROFILES.map((p) => ({
+          label: p,
+          type: 'radio' as const,
+          checked: p === activeProfile(),
+          click: () => {
+            if (p === activeProfile()) return
+            setActiveProfile(p as ProfileName)
+            quitting = true
+            tray?.destroy()
+            if (dshChild && dshChild.exitCode === null) dshChild.kill()
+            app.relaunch()
+            app.exit(0)
+          },
+        })),
+      },
       { type: 'separator' },
       {
         label: labels.quit,
@@ -1770,7 +1791,7 @@ async function proposeRecovery(attempt: number, tried: Set<string>): Promise<boo
   }
   if (!tried.has('snapshot') && culprit !== undefined && attempt >= 2) {
     tried.add('snapshot')
-    const snapshot = latestSnapshot(dshHome(), 'web')
+    const snapshot = latestSnapshot(dshHome(), activeProfile())
     if (snapshot !== undefined) {
       const approved = await confirmRecovery({
         title: '启动失败',
@@ -1779,7 +1800,7 @@ async function proposeRecovery(attempt: number, tried: Set<string>): Promise<boo
         confirm: '回滚并重试',
       })
       if (!approved) return false
-      const hint = restoreSnapshot(dshHome(), 'web', snapshot)
+      const hint = restoreSnapshot(dshHome(), activeProfile(), snapshot)
       appendFileSync(logFile(), `\n=== safe mode: rolled back to snapshot ${snapshot.id} (${hint}) ===\n`)
       recordRecoveryAction(safeModeStateFile(), { type: 'snapshot-restore', id: snapshot.id })
       return true
@@ -1854,7 +1875,7 @@ function restorePluginsAndRelaunch(): void {
 }
 
 async function restoreLastGoodAndRelaunch(): Promise<void> {
-  const snap = latestSnapshot(dshHome(), 'web')
+  const snap = latestSnapshot(dshHome(), activeProfile())
   if (!snap) {
     await dialog.showMessageBox({ type: 'info', message: isZhLocale() ? '没有可用的备份快照。' : 'No snapshot available.' })
     return
@@ -1868,7 +1889,7 @@ async function restoreLastGoodAndRelaunch(): Promise<void> {
     cancelId: 1,
   })
   if (response !== 0) return
-  restoreSnapshot(dshHome(), 'web', snap)
+  restoreSnapshot(dshHome(), activeProfile(), snap)
   appendFileSync(logFile(), `\n=== safe mode: manual snapshot restore ${snap.id} from tray ===\n`)
   quitting = true
   tray?.destroy()
@@ -1884,6 +1905,7 @@ async function restoreLastGoodAndRelaunch(): Promise<void> {
  * user declines recovery or every rung has been exhausted.
  */
 async function boot(): Promise<void> {
+  ensureProfileSeed(activeProfile())
   presetBundledPlugins()
   preheatProfileNodeModules()
   const tried = new Set<string>()
