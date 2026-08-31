@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
+import { snapshotProfileState } from './snapshot.js'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -162,6 +163,9 @@ export function extractBlockedPkg(output) {
 }
 
 export async function runDshPlugin(profile, action, source, mirror) {
+  if (action === 'install' || action === 'upgrade') {
+    snapshotProfileState({ dshHome: RUNTIME.dshHome, profile: profile || 'web' })
+  }
   const cwd = join(RUNTIME.dshHome, 'profiles', profile)
   let result = await runOnce(profile, action, source, mirror, cwd)
   if (action === 'add' && result.code !== 0) {

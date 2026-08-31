@@ -36,6 +36,7 @@ import {
   removeBundle,
   restoreAll,
 } from './safe-mode.js'
+import { latestSnapshot, restoreSnapshot } from './plugin-recovery-restore.js'
 import {
   defaultGpuFallbackState,
   gpuFallbackStateEquals,
@@ -230,8 +231,19 @@ function ensurePickerFallbackPatch(): boolean {
  * app dependencies (hoisted, asar-unpacked), so presetting needs no pnpm and
  * no network on the user's machine — the exact state `dsh plugin --profile
  * web add <name>` would produce, minus the registry round-trip.
+ *
+ * `dsh-desktop-preset-transfer` is presetted since dsh 0.1.2-alpha (its
+ * `connection` inject and `@deepseek-ai/dsh-agent-presets` import only exist
+ * upstream 0.1.2-alpha); see the sync-upstream report-preserve-don't-adopt
+ * stance on GitHub-only prereleases for the pre-0.1.2 rationale.
  */
-const PRESET_PLUGINS = ['dshmarket', 'dsh-plugin-market', 'dsh-plugin-version-manager', 'dsh-shell-control']
+const PRESET_PLUGINS = [
+  'dshmarket',
+  'dsh-plugin-market',
+  'dsh-plugin-version-manager',
+  'dsh-shell-control',
+  'dsh-desktop-preset-transfer',
+]
 
 /**
  * The web profile's shipped bundle template. Must stay in sync with
@@ -374,6 +386,109 @@ function presetBundledPlugins(): void {
     appendFileSync(logFile(), `=== preset bundled plugins: ${PRESET_PLUGINS.join(', ')} applied ===\n`)
   } catch (error) {
     appendFileSync(logFile(), `\n=== preset bundled plugins failed: ${error instanceof Error ? error.message : String(error)} ===\n`)
+  }
+}
+
+/**
+ * Preheat `dsh-home/profiles/node_modules/` with junctions that mirror the
+ * dsh app's own `node_modules/`, so dsh-app-boot's `healProfilesModuleFallback`
+ * finds every expected entry with the correct target on its first
+ * `readlinkSync` and returns without calling `trash()`.
+ *
+ * WorkBuddy's safe-delete sandbox intercepts every `trash()` call
+ * (genie-safe-delete.cjs → "Some operations were aborted") whenever a Node
+ * module loader still holds a handle to the link target. dsh web then exits
+ * code 1 on every startup, main.ts's safe-mode kicks in, and the welcome
+ * notice acknowledgement cannot persist (`scope.set` writes into the
+ * safe-mode-reset `cordis.patch.yml` and the derive step always reads the
+ * old value, so `acknowledge()` always reports the acknowledgement did
+ * not persist and the UI flashes the red `welcomeError`).
+ *
+ * We replicate dsh-app-boot's own `packageDirFromAnchor` (a logical
+ * `join(searchPath, packageName)` target, no `realpath`) and its
+ * `@deepseek-ai/dsh` install anchor, so the pre-built junction targets match
+ * byte-for-byte and `ensureSymlink` returns before it ever touches `unlinkSync`
+ * (which the safe-delete sandbox would otherwise intercept and fail on).
+ */
+function preheatProfileNodeModules(): void {
+  try {
+    const dshAnchor = createRequire(import.meta.url).resolve('@deepseek-ai/dsh/package.json')
+    const profileFallback = join(dshHome(), 'profiles', 'node_modules')
+    mkdirSync(profileFallback, { recursive: true })
+
+    /** Standard `node_modules` upward walk (mirrors Node's `Module._nodeModulePaths`).
+     * Implemented manually because Electron overrides `require.resolve.paths` in the
+     * main process, which otherwise returns wrong/empty search paths here. */
+    function nodeModulesSearchPaths(fromDir: string): string[] {
+      const paths: string[] = []
+      let current = fromDir
+      for (;;) {
+        paths.push(join(current, 'node_modules'))
+        const parent = dirname(current)
+        if (parent === current) break
+        current = parent
+      }
+      return paths
+    }
+
+    /** Mirror of dsh-app-boot's `packageDirFromAnchor`: the first node_modules-walk
+     * candidate that holds the package's manifest, as a logical (non-realpath) path. */
+    function packageDirFromAnchor(anchor: string, packageName: string): string | undefined {
+      for (const searchPath of nodeModulesSearchPaths(dirname(anchor))) {
+        const candidate = join(searchPath, packageName)
+        if (existsSync(join(candidate, 'package.json'))) return candidate
+      }
+      return undefined
+    }
+
+    const links = new Map<string, string>()
+    const manifestCache = new Map<string, Record<string, unknown>>()
+    const readManifest = (path: string): Record<string, unknown> => {
+      if (!manifestCache.has(path)) {
+        let parsed: Record<string, unknown> = {}
+        try { parsed = JSON.parse(readFileSync(path, 'utf8')) } catch { /* ignore unreadable */ }
+        manifestCache.set(path, parsed)
+      }
+      return manifestCache.get(path)!
+    }
+
+    const appManifest = readManifest(dshAnchor)
+    if (typeof appManifest.name === 'string') links.set(appManifest.name, dirname(dshAnchor))
+    const queue: string[] = [dshAnchor]
+    const visited = new Set<string>()
+    while (queue.length) {
+      const anchor = queue.shift()!
+      if (visited.has(anchor)) continue
+      visited.add(anchor)
+      const manifest = readManifest(anchor)
+      const deps = { ...(manifest.dependencies as Record<string, string> | undefined ?? {}), ...(manifest.peerDependencies as Record<string, string> | undefined ?? {}) }
+      for (const dep of Object.keys(deps)) {
+        if (links.has(dep)) continue
+        const dir = packageDirFromAnchor(anchor, dep)
+        if (dir === undefined) continue
+        links.set(dep, dir)
+        const depManifest = join(dir, 'package.json')
+        if (!visited.has(depManifest)) { visited.add(depManifest); queue.push(depManifest) }
+      }
+    }
+
+    let linked = 0
+    let skipped = 0
+    for (const [pkgName, target] of links) {
+      const link = join(profileFallback, pkgName)
+      mkdirSync(dirname(link), { recursive: true })
+      if (existsSync(link)) {
+        try {
+          if (readlinkSync(link) === target) { skipped++; continue }
+        } catch { /* not a symlink / unreadable — fall through to replace */ }
+        try { unlinkSync(link) } catch { /* swallow; still try to relink */ }
+      }
+      symlinkSync(target, link, 'junction')
+      linked++
+    }
+    appendFileSync(logFile(), `=== preheat profile node_modules: linked ${linked}, skipped ${skipped} (anchor ${dshAnchor}, ${links.size} pkg) ===\n`)
+  } catch (error) {
+    appendFileSync(logFile(), `=== preheat profile node_modules failed: ${error instanceof Error ? error.message : String(error)} ===\n`)
   }
 }
 
@@ -1122,6 +1237,7 @@ function createTray(port: number): void {
             { label: labels.restore, click: () => restorePluginsAndRelaunch() },
           ] as const)
         : []),
+      { label: isZhLocale() ? '回滚到上次良好状态' : 'Restore last good state', click: () => void restoreLastGoodAndRelaunch() },
       { type: 'separator' },
       {
         label: labels.quit,
@@ -1589,6 +1705,23 @@ async function proposeRecovery(attempt: number, tried: Set<string>): Promise<boo
     }
     return true
   }
+  if (!tried.has('snapshot') && culprit !== undefined && attempt >= 2) {
+    tried.add('snapshot')
+    const snapshot = latestSnapshot(dshHome(), 'web')
+    if (snapshot !== undefined) {
+      const approved = await confirmRecovery({
+        title: '启动失败',
+        message: '检测到插件安装前的备份快照，是否回滚到最后一次良好状态？',
+        detail: '回滚将把 profile 的插件 bundles 恢复到最近一次安装操作之前的状态。',
+        confirm: '回滚并重试',
+      })
+      if (!approved) return false
+      const hint = restoreSnapshot(dshHome(), 'web', snapshot)
+      appendFileSync(logFile(), `\n=== safe mode: rolled back to snapshot ${snapshot.id} (${hint}) ===\n`)
+      recordRecoveryAction(safeModeStateFile(), { type: 'snapshot-restore', id: snapshot.id })
+      return true
+    }
+  }
   if (culprit?.kind === 'unresolvable' && !tried.has(`bundle:${culprit.packageName}`)) {
     tried.add(`bundle:${culprit.packageName}`)
     const approved = await confirmRecovery({
@@ -1657,6 +1790,30 @@ function restorePluginsAndRelaunch(): void {
   app.exit(0)
 }
 
+async function restoreLastGoodAndRelaunch(): Promise<void> {
+  const snap = latestSnapshot(dshHome(), 'web')
+  if (!snap) {
+    await dialog.showMessageBox({ type: 'info', message: isZhLocale() ? '没有可用的备份快照。' : 'No snapshot available.' })
+    return
+  }
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    title: isZhLocale() ? '回滚快照' : 'Restore snapshot',
+    message: isZhLocale() ? `回滚到 ${snap.exportedAt} 的状态？` : `Restore to ${snap.exportedAt}?`,
+    buttons: [isZhLocale() ? '回滚并重启' : 'Restore & Relaunch', isZhLocale() ? '取消' : 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+  })
+  if (response !== 0) return
+  restoreSnapshot(dshHome(), 'web', snap)
+  appendFileSync(logFile(), `\n=== safe mode: manual snapshot restore ${snap.id} from tray ===\n`)
+  quitting = true
+  tray?.destroy()
+  if (dshChild && dshChild.exitCode === null) dshChild.kill()
+  app.relaunch()
+  app.exit(0)
+}
+
 /**
  * Boot the dsh server with the safe-mode recovery ladder: retry on failure,
  * and when the loader's error names a plugin, offer to neutralize just that
@@ -1665,6 +1822,7 @@ function restorePluginsAndRelaunch(): void {
  */
 async function boot(): Promise<void> {
   presetBundledPlugins()
+  preheatProfileNodeModules()
   const tried = new Set<string>()
   let attempt = 0
   for (;;) {

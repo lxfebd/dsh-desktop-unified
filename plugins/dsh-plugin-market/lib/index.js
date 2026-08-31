@@ -9,7 +9,9 @@ import {
   getPluginMeta, getPluginReadme, getPluginVersions,
   listDisabledEffective, checkPluginUpdates, backupProfile, restoreProfile,
   diagnoseProfile, isAgentRunning, cleanOrphanStore, getPnpmErrorHint,
+  RUNTIME,
 } from './market.js'
+import { snapshotProfileState } from './snapshot.js'
 /** Cordis 稳定插件名。 */
 export const name = 'dsh-plugin-market'
 
@@ -493,6 +495,12 @@ export function apply(ctx) {
       const body = await readBody(req)
       if (!body || !body.backup) return sendJson(res, 400, { ok: false, error: '缺少 backup 字段' })
       return sendJson(res, 200, restoreProfile('web', body.backup))
+    }))))
+
+    // GET /api/market/snapshot → 触发装前快照（返回本次快照元信息），供 UI/守卫触发快照
+    disposers.push(ctx.webServer.register(route('/api/market/snapshot', safe((req, res) => {
+      const snap = snapshotProfileState({ dshHome: RUNTIME.dshHome, profile: 'web' })
+      return sendJson(res, 200, { ok: true, id: snap.id, exportedAt: snap.exportedAt, bundles: snap.bundles })
     }))))
 
     // GET /api/market/diagnose  → 诊断面板

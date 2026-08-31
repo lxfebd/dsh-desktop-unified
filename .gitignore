@@ -4,6 +4,10 @@ dist-installer/
 *.log
 .DS_Store
 
+# Local pnpm content-addressable store + npm cache (this machine's G: is dead)
+.pnpm-store/
+.npm-cache/
+
 # ZCode agent local state (session plans, etc.)
 .zcode/
 

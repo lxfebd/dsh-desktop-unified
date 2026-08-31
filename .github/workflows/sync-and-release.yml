@@ -34,6 +34,8 @@ jobs:
       changed: ${{ steps.sync.outputs.changed }}
       version: ${{ steps.sync.outputs.version }}
       upstream_version: ${{ steps.sync.outputs.upstream_version }}
+      github_newer: ${{ steps.sync.outputs.github_newer }}
+      github_versions: ${{ steps.sync.outputs.github_versions }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -75,6 +77,11 @@ jobs:
             args+=(--force)
           fi
           node scripts/sync-upstream.mjs "${args[@]}"
+
+      - name: Warn when a GitHub-only prerelease is ahead of npm
+        if: steps.sync.outputs.github_newer == 'true'
+        run: |
+          echo "::warning::GitHub prerelease '${{ steps.sync.outputs.github_versions }}' is ahead of npm '${{ steps.sync.outputs.upstream_version }}' but has no npm tarball yet. It is NOT adopted automatically (dsh-stays-official). Review and decide whether to vendor it deliberately."
 
       - name: Refresh lockfile for the new upstream version
         if: steps.sync.outputs.changed == 'true'

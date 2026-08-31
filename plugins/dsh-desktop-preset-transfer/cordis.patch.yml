@@ -1,0 +1,9 @@
+# dsh-desktop-preset-transfer bundle patch — inserted after the profile layer.
+#
+# 一行 host：注册 /api/agent-preset.export（GET）与 /api/agent-preset.import（POST）
+# 两条预设包路由。connection 提供公开的 exact-Fetch 路由注册表（dsh-client-connection，
+# 0.1.2-alpha 引入），与上游官方 /api/session.export 使用同一注册缝。
+- insert:
+    - id: dsh-desktop-preset-transfer
+      name: dsh-desktop-preset-transfer
+      inject: [connection]

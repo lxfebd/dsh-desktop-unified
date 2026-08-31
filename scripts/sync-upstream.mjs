@@ -27,16 +27,19 @@
  * @module dsh-desktop/scripts/sync-upstream
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync, appendFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join, dirname, resolve } from 'node:path'
+import { promisify } from 'node:util'
 import semver from 'semver'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PKG_PATH = join(ROOT, 'package.json')
 const UPSTREAM = '@deepseek-ai/dsh'
 const SCOPE = '@deepseek-ai'
+const UPSTREAM_REPO = 'deepseek-ai/deepseek-harness'
+const execFileAsync = promisify(execFile)
 
 /**
  * Latest published upstream version, straight from the npm registry.
@@ -55,6 +58,53 @@ function upstreamLatest() {
     .sort(semver.rcompare)[0]
   if (!best) throw new Error(`no valid version in dist-tags of ${UPSTREAM}: ${JSON.stringify(tags)}`)
   return best
+}
+
+/**
+ * Probe the upstream GitHub repo for prerelease tags that npm does not carry.
+ *
+ * npm's dist-tags mirror only the versions upstream has pushed to the npm
+ * registry; a tag like `dsh-v0.1.2-alpha.1` can exist on GitHub long before a
+ * matching tarball lands on npm (the harness project vendors its own tarballs
+ * during testing). A dist-tag-only check would silently skip those releases.
+ *
+ * This probes raw git refs instead of the GitHub REST API (which rate-limits
+ * anonymous callers hard in CI). `git ls-remote` needs no credentials and
+ * answers with one round-trip.
+ *
+ * The result is reported — `github_newer` / `github_versions` — but never
+ * adopted automatically: adopting a npm-less version means vendoring the whole
+ * `@deepseek-ai/*` tree as `file:` dependencies, a deliberate heavier move
+ * that the human operator should approve first. `changed` stays npm-driven.
+ *
+ * Fails open: any probe error (no git, no network, repo private) degrades to
+ * a no-op and the caller proceeds with the npm-only verdict, so CI keeps the
+ * exact existing behaviour when GitHub is unreachable.
+ * @param {string} pinned - the version currently pinned in package.json
+ * @returns {Promise<{newer: boolean, versions: string[]}>}
+ */
+async function probeGithubPrerelease(pinned) {
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-remote', '--tags', `https://github.com/${UPSTREAM_REPO}.git`], {
+      encoding: 'utf8',
+      timeout: 20_000,
+    })
+    const versions = []
+    for (const line of stdout.split('\n')) {
+      // tag refs look like: <sha>\trefs/tags/<name>  or ...^{}
+      const ref = line.split('\t')[1]
+      if (!ref || !ref.startsWith('refs/tags/dsh-v')) continue
+      if (ref.endsWith('^{}')) continue // dereferenced annotate-tag duplicate
+      const candidate = ref.slice('refs/tags/dsh-v'.length)
+      if (semver.valid(candidate)) versions.push(candidate)
+    }
+    const best = versions.sort(semver.rcompare)[0]
+    const newer = Boolean(best) && semver.gt(best, pinned)
+    return { newer, versions: versions.sort(semver.rcompare) }
+  } catch (error) {
+    console.log(`github prerelease probe unavailable (${error?.message ?? error}); falling back to npm dist-tags only`)
+    return { newer: false, versions: [] }
+  }
 }
 
 /**
@@ -178,7 +228,7 @@ function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
   if (updated.length) console.log(`peer-only runtime deps updated: ${updated.join('; ')}`)
 }
 
-function main() {
+async function main() {
   const force = process.argv.includes('--force')
   const pkg = JSON.parse(readFileSync(PKG_PATH, 'utf8'))
   const latest = upstreamLatest()
@@ -201,14 +251,24 @@ function main() {
     console.log(`upstream ${pinned} -> ${latest}; desktop version -> ${version}`)
   }
 
+  // Probe GitHub for npm-less prerelease tags. This is a reporting channel
+  // only — it never changes `changed`/`legacy` — so a GitHub-only tag higher
+  // than the npm `latest` is surfaced to the operator without being adopted.
+  const { newer, versions } = await probeGithubPrerelease(pinned)
+
   // `changed` = a build is wanted (upstream moved, or --force from a
   // repo-change / orphan-tag / manual rebuild); `upstream_changed` = the
   // upstream dependency itself moved, which CI uses to word the commit.
+  // `github_newer` / `github_versions` report a GitHub prerelease tag that npm
+  // does not carry (e.g. dsh-v0.1.2-alpha.1) — the operator can then decide
+  // whether to vendor it deliberately.
   const outputs = {
     changed: String(changed),
     upstream_changed: String(upstreamChanged),
     version: pkg.version,
     upstream_version: latest,
+    github_newer: String(newer),
+    github_versions: versions.join(','),
   }
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(
@@ -223,7 +283,7 @@ function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main()
+  void main()
 }
 
-export { nextVersion, buildStamp }
+export { nextVersion, buildStamp, probeGithubPrerelease }

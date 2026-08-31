@@ -29,6 +29,7 @@ const LOG_SCAN_BYTES = 128 * 1024
 export type RecoveryAction =
   | { type: 'disable-entry'; entryId: string; block: string }
   | { type: 'remove-bundle'; packageName: string }
+  | { type: 'snapshot-restore'; id: string }
   | FullSafeModeAction
 
 /** The full safe-mode strip, recorded for restore. */
@@ -63,10 +64,26 @@ export function readLastAttemptLog(logPath: string): string {
 
 /**
  * Find the plugin responsible for the crash in one attempt's log output.
- * Apply-time loader errors name both the entry id and the package; bundle
- * resolution errors name only the package. The last match wins — a nested
- * `[cause]` chain repeats the message, and the innermost frame is the
- * specific one.
+ *
+ * Evidence dimensions, in priority order — the LAST match wins, because a
+ * nested `[cause]` chain repeats the message and the innermost frame is the
+ * specific one:
+ *   1. apply-time loader errors (name entry id + package)
+ *   2. bundle resolution errors (name only the package)
+ *   3. `declares no dsh.bundle` — a package listed as a profile bundle that
+ *      ships no `dsh.bundle` manifest block, so it can never load
+ *   4. `plugin(s) failed to load: …` (single package name)
+ *   5. the `Failed to load plugins` block: every following line that is
+ *      itself a bare package reference is treated as a candidate, and the
+ *      last one wins (mirrors dataelement/dsh-desktop plugin-recovery-detection)
+ *   6. `duplicate loader entry id` — a loader-entry conflict, attributed as
+ *      an un-resolvable package (there is no per-entry disable for it)
+ *   7. rc.8 插槽冲突：两个插件争用同一 slot。错误形如
+ *      slot "xxx" conflict / duplicate slot "xxx" /
+ *      slot "xxx" already (registered|provided|occupied|taken)
+ *      此类冲突涉及两个插件，无法靠禁用单个 entry 干净解决，故只捕获
+ *      slot 名，交给 proposeRecovery 走「插槽冲突」对话框 + 全量安全模式。
+ *
  * @param attemptLog - output of one boot attempt (see {@link readLastAttemptLog})
  * @returns the culprit, or `undefined` when the crash is not attributable
  */
@@ -80,12 +97,40 @@ export function findCulprit(attemptLog: string): Culprit | undefined {
   for (const match of attemptLog.matchAll(unresolvable)) {
     culprit = { kind: 'unresolvable', packageName: match[1] }
   }
-  // rc.8 插槽冲突：两个插件争用同一 slot。错误形如
-  //   slot "xxx" conflict / duplicate slot "xxx" /
-  //   slot "xxx" already (registered|provided|occupied|taken)
-  // 此类冲突涉及两个插件，无法靠禁用单个 entry 干净解决，故只捕获
-  // slot 名，交给 proposeRecovery 走「插槽冲突」对话框 + 全量安全模式。
-  const slotConflict = /slot "([^"]+)" (?:conflict|duplicate|already (?:registered|provided|occupied|taken))/i
+  // A package listed as a profile bundle that ships no `dsh.bundle` block.
+  const noBundle = /profile bundle ["']([^"']+)["'] declares no dsh\.bundle/gi
+  for (const match of attemptLog.matchAll(noBundle)) {
+    culprit = { kind: 'unresolvable', packageName: match[1] }
+  }
+  // A single-line "plugin(s) failed to load: <pkg>" summary.
+  const failedToLoad = /plugin\(s\) failed to load:\s*([a-zA-Z0-9@/_-]+)/gi
+  for (const match of attemptLog.matchAll(failedToLoad)) {
+    culprit = { kind: 'unresolvable', packageName: match[1] }
+  }
+  // The `Failed to load plugins` block: the loader prints a title line then
+  // one bare package reference per line. Take the last bare package-looking
+  // line after the title as the culprit. Lines carry a `[stdout]`/`[stderr]`
+  // prefix from the shared log, so strip it before matching (both here and in
+  // the package lines).
+  const stripped = attemptLog.split(/\r?\n/).map((line) => line.replace(/^\[(?:stdout|stderr)\]\s*/, '')).join('\n')
+  const bootTitle = /^Failed to load plugins\s*$/im
+  const titleMatch = bootTitle.exec(stripped)
+  if (titleMatch) {
+    const after = stripped.slice(titleMatch.index + titleMatch[0].length).split(/\r?\n/)
+    const pkgRef = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i
+    for (const line of after) {
+      const candidate = line.trim()
+      if (pkgRef.test(candidate)) {
+        culprit = { kind: 'unresolvable', packageName: candidate }
+      }
+    }
+  }
+  // Duplicate loader entry id — a registration conflict, no per-entry disable.
+  const duplicateEntry = /duplicate loader entry id:\s*["']?([^\s"']+)["']?/gi
+  for (const match of attemptLog.matchAll(duplicateEntry)) {
+    culprit = { kind: 'unresolvable', packageName: match[1] }
+  }
+  const slotConflict = /slot\s+["']?([^"'\s]+)["']?\s+(?:conflict|duplicate|already\s+(?:registered|provided|occupied|taken|has\s+a\s+registration))/gi
   for (const match of attemptLog.matchAll(slotConflict)) {
     culprit = { kind: 'slot-conflict', slotName: match[1] }
   }
@@ -264,6 +309,10 @@ export function restoreAll(statePath: string, homeDir: string, profileDir: strin
           }
           writeManifest(manifestPath, manifest)
         }
+      } else if (action.type === 'snapshot-restore') {
+        // A snapshot rollback already rewrote the profile to a good state and
+        // is intentionally not reversible here (there is no earlier snapshot
+        // to fall back through); skip when undoing recovery actions.
       } else {
         if (existsSync(manifestPath) && action.removedBundles.length > 0) {
           const manifest = readManifest(manifestPath)

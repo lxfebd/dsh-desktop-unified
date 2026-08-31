@@ -1,0 +1,31 @@
+{
+  "name": "dsh-desktop-preset-transfer",
+  "description": "DeepSeek Harness 预设包（.dshpreset）便携导入/导出插件：把 agent preset 打包成 zip 存档（manifest + 文件树），支持命名冲突检查、信任警告、路径穿越/大小/数量上限防护。0.1.2-alpha.1 起 dsh-host-apiproxy 的 preset patch 被删除，此能力归桌面壳所有——注册 /api/agent-preset.export 与 /api/agent-preset.import 两条官方 Fetch 路由（dsh-client-connection 的 connection.fetch 注册表，与上游 /api/session.export 同缝）。",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent-presets": "^0.0.1-rc.1"
+  },
+  "license": "MIT"
+}

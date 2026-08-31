@@ -94,16 +94,19 @@ export function analyzeDependencies(opts: AnalyzeOptions): DependencyReport {
 
   for (const bundle of bundles) {
     const link = join(opts.fallbackDir, bundle)
-    if (existsSync(link)) {
-      try {
-        const st = lstatSync(link)
-        if (st.isSymbolicLink()) {
-          const target = readlinkSync(link)
-          if (!existsSync(target)) mountFailures.push({ bundle, link, reason: 'missing-target' })
-        }
-      } catch {
-        mountFailures.push({ bundle, link, reason: 'broken-symlink' })
+    try {
+      // lstat does not follow the link target, so a broken junction/symlink
+      // (target missing) is still seen as a real link here — unlike existsSync,
+      // which follows and reports false for it.
+      const st = lstatSync(link)
+      if (st.isSymbolicLink()) {
+        const target = readlinkSync(link)
+        if (!existsSync(target)) mountFailures.push({ bundle, link, reason: 'missing-target' })
       }
+    } catch {
+      // lstat failed: distinguish a genuinely absent bundle (handled as an
+      // orphan below) from an unreadable link that still occupies the path.
+      if (existsSync(link)) mountFailures.push({ bundle, link, reason: 'broken-symlink' })
     }
     const deps = bundleDeps(bundle, opts)
     if (deps === undefined) {
