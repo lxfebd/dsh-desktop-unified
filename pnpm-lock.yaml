@@ -113,6 +113,9 @@ importers:
       dsh-shell-control:
         specifier: file:plugins/dsh-shell-control
         version: file:plugins/dsh-shell-control
+      dsh-terminal:
+        specifier: file:plugins/dsh-terminal
+        version: file:plugins/dsh-terminal
       dshmarket:
         specifier: ^1.10.1
         version: 1.10.1(@deepseek-ai/cordis@4.0.2)
@@ -4126,6 +4129,9 @@ packages:
 
   dsh-shell-control@file:plugins/dsh-shell-control:
     resolution: {directory: plugins/dsh-shell-control, type: directory}
+
+  dsh-terminal@file:plugins/dsh-terminal:
+    resolution: {directory: plugins/dsh-terminal, type: directory}
 
   dshmarket@1.10.1:
     resolution: {integrity: sha512-8AWM8RT2tttJsozTBm6mAfI+cNpCIbeBdP9IoydJdHlH/+x72aNqmv3AWdbNfKDDwkkqM2Ce/XRDhha9HG0Q5Q==}
@@ -10202,6 +10208,8 @@ snapshots:
   dsh-plugin-version-manager@file:plugins/dsh-plugin-version-manager: {}
 
   dsh-shell-control@file:plugins/dsh-shell-control: {}
+
+  dsh-terminal@file:plugins/dsh-terminal: {}
 
   dshmarket@1.10.1(@deepseek-ai/cordis@4.0.2):
     dependencies:

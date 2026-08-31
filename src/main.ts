@@ -244,6 +244,7 @@ const PRESET_PLUGINS = [
   'dsh-plugin-version-manager',
   'dsh-shell-control',
   'dsh-desktop-preset-transfer',
+  'dsh-terminal',
 ]
 
 /**
