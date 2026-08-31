@@ -572,6 +572,10 @@ function toolingPathPrefix(): string {
 function startDsh(port: number): ChildProcess {
   const log = logFile()
   appendFileSync(log, `\n=== dsh web starting on port ${port} at ${new Date().toISOString()} ===\n`)
+  dshAuthUrl = undefined
+  dshReadyCookie = undefined
+  /** Rolling tail of the child's stdout, scanned for the printed Web URL line. */
+  let stdoutTextBuf = ''
   // --expose-internals is required by cordis-plugin-hmr's HMR service, which
   // ships in the base profile and reads Node internals unavailable by default.
   const args = ['--expose-internals', dshBin(), 'web']
@@ -596,7 +600,20 @@ function startDsh(port: number): ChildProcess {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
-  child.stdout?.on('data', (chunk: Buffer) => appendFileSync(log, chunk))
+  child.stdout?.on('data', (chunk: Buffer) => {
+    appendFileSync(log, chunk)
+    // dsh 0.1.2-alpha prints the authenticated root URL once its plugin tree
+    // settles: `dsh web: http://<host>:<port>/?token=<launchToken>`. Keep the
+    // newest full URL; the shell needs it to pass the browser-trust fence.
+    stdoutTextBuf += chunk.toString('utf8')
+    const claimed = /dsh web:\s+(\S+)/.exec(stdoutTextBuf)
+    if (claimed) {
+      dshAuthUrl = claimed[1]
+    }
+    // 保留最后一个换行符之后的未完成行，防止跨 chunk 的 URL 行被截断
+    const lastNl = stdoutTextBuf.lastIndexOf('\n')
+    if (lastNl !== -1) stdoutTextBuf = stdoutTextBuf.slice(lastNl + 1)
+  })
   child.stderr?.on('data', (chunk: Buffer) => appendFileSync(log, chunk))
   child.on('exit', (code, signal) =>
     appendFileSync(log, `\n=== dsh web exited (code ${code}, signal ${signal}) at ${new Date().toISOString()} ===\n`),
@@ -619,21 +636,52 @@ async function waitReady(port: number, child: ChildProcess): Promise<void> {
     if (child.exitCode !== null) {
       throw new Error(`dsh exited with code ${child.exitCode} before becoming ready`)
     }
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/`)
-      if (res.ok) {
-        stableAnswers++
-        if (stableAnswers >= 3) return
-      } else {
-        stableAnswers = 0
-      }
-    } catch {
-      // connection refused while the server is still booting; keep polling
+    // In 0.1.2-alpha the clean root only answers once authenticated. The
+    // probe completes the process-token exchange (303 + Set-Cookie) before
+    // judging readiness, since Node's fetch carries no cookie jar.
+    if (await probeReady(port)) {
+      stableAnswers++
+      if (stableAnswers >= 3) return
+    } else {
       stableAnswers = 0
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
   throw new Error(`dsh did not answer on port ${port} within ${READY_TIMEOUT_MS / 1000}s`)
+}
+
+/** Resolve the shell's entry URL: the authenticated root once the child has
+ * printed it, else the bare loopback root (which dsh now answers with a 401
+ * until the token URL arrives). */
+function authenticatedRootUrl(port: number): string {
+  return dshAuthUrl ?? `http://127.0.0.1:${port}/`
+}
+
+/** Cookie-aware readiness probe. Once `dshReadyCookie` is known it reuses it
+ * against the clean root; before that it fetches the token URL with redirects
+ * disabled to mint the signed session cookie from its 303 `Set-Cookie` — the
+ * same exchange a browser performs automatically. */
+async function probeReady(port: number): Promise<boolean> {
+  if (dshReadyCookie !== undefined) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`, { headers: { cookie: dshReadyCookie } })
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+  try {
+    const res = await fetch(authenticatedRootUrl(port), { redirect: 'manual' })
+    // No token print yet (still booting): a 401/connection error isn't ready.
+    if (res.status !== 303) return res.ok
+    const cookie = res.headers.get('set-cookie')?.split(';')[0]
+    if (!cookie) return false
+    dshReadyCookie = cookie
+    const index = await fetch(`http://127.0.0.1:${port}/`, { headers: { cookie } })
+    return index.ok
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -910,7 +958,7 @@ function createWindow(port: number, prefs: ShellPrefs = loadPrefs()): BrowserWin
   win.webContents.on('responsive', () => {
     appendFileSync(logFile(), `\n=== main window webContents responsive again ===\n`)
   })
-  void win.loadURL(`http://127.0.0.1:${port}/`)
+  void win.loadURL(authenticatedRootUrl(port))
   return win
 }
 
@@ -1623,6 +1671,21 @@ let mainWindow: BrowserWindow | undefined
 let tray: Tray | undefined
 /** Port the dsh server bound; kept so hidden-window restores can recreate the window. */
 let serverPort = 0
+/**
+ * Authenticated Web URL for the current boot. dsh 0.1.2-alpha serves every
+ * request a minimal 401 except the root path carrying its launch token
+ * (`GET /?token=<launchToken>`), which mints the signed session cookie. The
+ * shell parses this URL off the child's stdout and uses it both for the
+ * readiness probe and as the window's load target. Resets each boot attempt.
+ */
+let dshAuthUrl: string | undefined
+/**
+ * Session cookie learned from the process-token exchange. Node's fetch does
+ * not carry a cookie jar, so the readiness probe mints the signed cookie from
+ * the token URL's 303 `Set-Cookie` once, then reuses it across probes (the
+ * window itself uses Chromium's real jar and needs no help). Reset per boot.
+ */
+let dshReadyCookie: string | undefined
 /** Set only by an explicit quit (tray menu, Cmd+Q); guards the close-to-tray interception. */
 let quitting = false
 /** Set during a shell-control-driven window rebuild, so the old window's close

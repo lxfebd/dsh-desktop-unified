@@ -130,6 +130,12 @@ jobs:
 
       - run: pnpm run build
 
+      - name: Gate on vitest unit tests
+        run: pnpm test
+
+      - name: Validate runtime dependencies load on this platform/arch
+        run: node scripts/check-platform-arch.mjs
+
       - name: Smoke-test the pinned upstream (boot dsh web, probe readiness)
         run: node scripts/ci-smoke.mjs
 
