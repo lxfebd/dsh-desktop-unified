@@ -85,6 +85,22 @@ export const OFFICIAL_CATALOG = [
     type: 'npm', bundle: true, builtin: true,
     category: '性能优化',
   },
+  {
+    id: 'dsh-api-balance',
+    name: 'dsh-api-balance',
+    source: 'dsh-api-balance',
+    desc: 'API 余额悬浮徽章（MIT）· 零依赖 · 总余额/今日 token/本月/缓存命中环形图，host 侧查官方 balance 接口',
+    type: 'npm', bundle: true, builtin: true,
+    category: '用量与账单',
+  },
+  {
+    id: 'dsh-cost-meter',
+    name: 'dsh-cost-meter',
+    source: 'dsh-cost-meter',
+    desc: '费用看板（MIT）· 会话/当日 API 费用 + 账户余额 + 预算上限提醒 · 支持峰谷计价与官方价格同步',
+    type: 'npm', bundle: true, builtin: true,
+    category: '用量与账单',
+  },
 ]
 
 // ---- 小工具 ----
