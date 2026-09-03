@@ -14,3 +14,11 @@ dist-installer/
 # VitePress build output
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# Local agent-generated working docs (engineering plans, specs, handover
+# ledger, progress board) — kept on this machine only, never uploaded.
+# p6-plugins-contribution.json stays tracked: it is the upstream contribution
+# draft, not agent-generated working material.
+docs/handover/HANDOVER.md
+docs/handover/progress-board.html
+docs/handover/superpowers/
