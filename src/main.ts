@@ -76,7 +76,7 @@ const LAST_PORT = 3099
 /** How long to wait for the server to answer before declaring boot failure. */
 const READY_TIMEOUT_MS = 60_000
 /** Release page used as the manual-download fallback when auto-update fails. */
-const RELEASES_URL = 'https://github.com/foolgry/dsh-desktop/releases'
+const RELEASES_URL = 'https://github.com/deepseekhar/dsh-desktop-unified/releases'
 
 /**
  * UI locale switch: the shell ships Chinese + English strings; every other
@@ -194,7 +194,7 @@ function dshBin(): string {
  */
 const BROWSE_PICKER_PATCH = `# Force the in-app file-tree picker (pure node:fs) instead of the native OS
 # dialog. The native picker's koffi.node crashes under Electron's embedded Node
-# ABI on win32 — see https://github.com/foolgry/dsh-desktop/issues/1
+# ABI on win32 — see https://github.com/deepseekhar/dsh-desktop-unified/issues/1
 - id: directory-picker
   disabled: true
 

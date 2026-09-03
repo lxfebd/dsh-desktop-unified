@@ -2,54 +2,45 @@
 
 DSH Desktop 是开箱即用的安装包——你的电脑上无需 Node.js、npm 或终端。
 
-## 下载
+> 本仓库目前**未对外发布**（无 Releases、无 Homebrew tap）。唯一运行方式是本地开发。若你拥有源码（例如维护者直接分享），下面的步骤就够了。
 
-到 [Releases](https://github.com/foolgry/dsh-desktop/releases) 页面下载最新构建。
+## 前置条件
+
+Node.js `^22.19 || >=24`、[pnpm](https://pnpm.io)（11.22.0）、[just](https://just.systems)。
+
+## 从源码运行
+
+```sh
+just install    # 安装依赖（pnpm install）
+just dev        # tsc 编译后从源码启动 Electron 应用
+```
 
 ### macOS（Apple Silicon / M 系列）
 
-推荐用 Homebrew 安装，一条命令搞定：
+同样执行 `just install` / `just dev`。构建分发包：
 
 ```sh
-brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+just dist-mac   # 生成 dmg + zip 到 dist-installer/
 ```
 
-`xattr -cr` 清除未公证应用的隔离属性，避免首次打开提示「已损坏」。用 Homebrew 安装后，有新版本时可以直接在 App 弹窗里点「Update via Homebrew」一键升级（见下方「更新」）。
-
-也可以到 Releases 下载 `DSH-Desktop-*-mac-arm64.dmg` 手动安装。应用**未签名**，首次打开时：
+产出的 `.app` **未签名**，首次打开时：
 
 - 如果提示"无法验证开发者"：**右键点应用 → 打开**。
-- 如果提示 **"DSH Desktop 已损坏，无法打开"**：在**终端**执行一次上面的 `xattr` 命令，之后即可正常打开。
+- 如果提示 **"DSH Desktop 已损坏，无法打开"**：在**终端**执行一次 `xattr -cr "/Applications/DSH Desktop.app"`。
 
 ### Windows（64 位）
 
-下载 `DSH-Desktop-*-win-x64-setup.exe`。
-
-SmartScreen 会提示风险——点 **更多信息 → 仍要运行**。
-
-### 下载慢或无法访问 GitHub？
-
-安装包托管在 GitHub Releases，直连慢或超时时，可以给下载链接加一个 GitHub 加速前缀（如 `https://ghfast.top/`），用浏览器或下载工具下载，例如：
-
-```text
-https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<版本>-mac-arm64.dmg
-```
-
-用 Homebrew 的话，可以把加速下载的安装包放进 brew 缓存，再正常安装/升级——brew 命中缓存会跳过下载，sha256 校验照常执行：
+本地开发执行 `just dev`，或构建分发包：
 
 ```sh
-# 升级前先刷新 tap 元数据（数据量很小，一般可直连完成）
-brew update
-# 用加速前缀把安装包下载到 brew 期望的缓存路径（文件名以 Releases 最新版为准）
-curl -L -o "$(brew --cache --cask foolgry/tap/dsh-desktop)" \
-  "https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<版本>-mac-arm64.dmg"
-# 正常安装/升级
-brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+just dist-win   # 生成 nsis 安装包到 dist-installer/
 ```
 
-::: warning 第三方加速服务
-`ghfast.top`、`gh-proxy.com` 等加速域名是社区公共服务，会不定期更换或失效；不可用时换一个当时可用的 GitHub 加速前缀即可。安装包完整性由发布页的 `SHA256SUMS` 与 cask 内置的 sha256 校验保证，与下载途径无关。
-:::
+未签名构建会被 SmartScreen 提示风险——点 **更多信息 → 仍要运行**。
+
+## 发布之后
+
+一旦有 Releases，安装包会挂在 Releases 页，macOS 可能经由 Homebrew tap 提供。下载件会附带 `SHA256SUMS` 清单用于校验完整性。在那之前，一切以本地开发为准。
 
 ## 更新
 

@@ -1,55 +1,44 @@
 # Installation
 
-DSH Desktop ships as a ready-to-run installer — no Node.js, npm, or terminal needed on your machine.
+DSH Desktop is packaged as a ready-to-run desktop app. **This repository is not yet published** (no Releases, no Homebrew tap), so for now the only way to run it is from source. If you have the source (e.g. shared directly by the maintainer), the steps below are all you need.
 
-## Download
+## Prereqs
 
-Grab the latest build from the [Releases](https://github.com/foolgry/dsh-desktop/releases) page.
+Node.js `^22.19 || >=24`, [pnpm](https://pnpm.io) (11.22.0), and [just](https://just.systems).
+
+## From source
+
+```sh
+just install    # install dependencies (pnpm install)
+just dev        # compile with tsc, then launch the Electron app from source
+```
 
 ### macOS (Apple Silicon / M-series)
 
-Homebrew is the recommended install — one command does everything:
+The same `just install` / `just dev` steps apply. To build a distributable:
 
 ```sh
-brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+just dist-mac   # produce dmg + zip into dist-installer/
 ```
 
-The `xattr -cr` clears the quarantine attribute on the unnotarized app, preventing the "damaged" error on first launch. Installed via Homebrew, future updates are one click away in the app's update dialog ("Update via Homebrew" — see **Updates** below).
-
-Or download `DSH-Desktop-*-mac-arm64.dmg` from Releases and install manually. The app is **unsigned**, so on first launch:
+The produced `.app` is **unsigned**, so on first launch:
 
 - If macOS says it "cannot verify the developer": **right-click the app → Open**.
-- If it says **"DSH Desktop is damaged and can't be opened"**: run the `xattr` command above once in **Terminal**, then it opens normally.
+- If it says **"DSH Desktop is damaged and can't be opened"**: run `xattr -cr "/Applications/DSH Desktop.app"` once in **Terminal**.
 
 ### Windows (64-bit)
 
-Download `DSH-Desktop-*-win-x64-setup.exe`.
-
-SmartScreen will warn about risk — click **More info → Run anyway**.
-
-### Downloads are slow or GitHub is unreachable?
-
-Installers live on GitHub Releases. When a direct connection is slow or times out, prefix the download URL with a GitHub acceleration proxy (e.g. `https://ghfast.top/`) and download with your browser or a download manager:
-
-```text
-https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<version>-mac-arm64.dmg
-```
-
-Homebrew users can seed the brew cache with the accelerated download and then install/upgrade normally — brew skips the download on a cache hit and still verifies the sha256:
+Run `just dev` from source for local development, or build a distributable:
 
 ```sh
-# Refresh tap metadata first (tiny; a direct connection usually suffices)
-brew update
-# Download the installer into brew's expected cache path (filename per the latest release)
-curl -L -o "$(brew --cache --cask foolgry/tap/dsh-desktop)" \
-  "https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<version>-mac-arm64.dmg"
-# Install/upgrade as usual
-brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
+just dist-win   # produce an nsis installer into dist-installer/
 ```
 
-::: warning Third-party proxies
-Acceleration domains such as `ghfast.top` and `gh-proxy.com` are community services that come and go — if one is down, swap in whichever GitHub proxy prefix works at the time. Installer integrity is guaranteed by the release's `SHA256SUMS` and the cask's built-in sha256 check, regardless of how the bytes were fetched.
-:::
+SmartScreen will warn about risk on an unsigned build — click **More info → Run anyway**.
+
+## When the project is published
+
+Once Releases exist, installers will be attached there and (on macOS) may be offered via a Homebrew tap. Downloads come with a `SHA256SUMS` manifest for verifying installer integrity. Until then, everything above is local.
 
 ## Updates
 

@@ -1,5 +1,5 @@
 /**
- * 装配窗口级安全 handler。foolgry 是单窗口应用：setWindowOpenHandler
+ * 装配窗口级安全 handler。本项目是单窗口应用：setWindowOpenHandler
  * 对所有 window.open 返回 deny（受信任源也不再开新窗口），仅把
  * http(s) 外链交给系统浏览器。新增 will-attach-webview 阻断与
  * clipboard-sanitized-write 权限放行（受信任剪贴板写）。

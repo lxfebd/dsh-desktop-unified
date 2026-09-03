@@ -1,94 +1,166 @@
-# DSH Desktop
+# DeepSeek Harness Desktop
 
 English | [中文](README.md)
 
-Download-and-run desktop build of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). No Node.js, no npm, no terminal required. Install the app, open it, paste your DeepSeek API key into the built-in web UI, and start letting the AI run tasks for you (read/write files, execute commands, write code, automate operations, etc.).
+> **This is a community (unofficial) build.** The upstream [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) is open-sourced under the MIT license. This repository is an Electron desktop shell + automated packaging scripts + a set of self-developed preset plugins. The DeepSeek name and whale logo are trademarks of DeepSeek, used here only to identify the packaged upstream software.
 
-> ⚠️ **This is a community (unofficial) build.** The upstream [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) is open-sourced under the MIT license. This repository is only an Electron desktop shell plus automated packaging scripts — it is not an official DeepSeek product. The DeepSeek name and whale logo are trademarks of DeepSeek, used here only to identify the packaged upstream software.
+---
 
-📖 **Documentation**: [foolgry.github.io/dsh-desktop](https://foolgry.github.io/dsh-desktop/) — found a bug or have a suggestion? Please [open an issue](https://github.com/foolgry/dsh-desktop/issues).
+## 🎯 What is DeepSeek Harness Desktop?
 
-## Download and install
+It wraps the official DeepSeek Harness (`@deepseek-ai/dsh`) into a desktop app you can download and run directly — **no system Node.js, npm, or terminal required**. Open the app, paste in your DeepSeek API key, and let the AI run tasks on your machine (read/write files, run commands, write code, automate operations, etc.).
 
-Get the latest version from the [Releases](https://github.com/foolgry/dsh-desktop/releases) page:
+## ✨ What makes this version different
 
-- **macOS (Apple Silicon / M-series chips)**: Homebrew is the recommended install — one command does everything (the `xattr -cr` clears the quarantine attribute on the unnotarized app, preventing the "damaged" error; it also enables in-app one-click updates later, see below):
-  ```sh
-  brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
-  ```
-  Or download `DSH-Desktop-*-mac-arm64.dmg` and install manually: the app is unsigned, so if macOS says it "cannot verify the developer" on first launch, **right-click the app → Open**; if it says **"damaged and can't be opened"**, run the `xattr` command above once in Terminal.
-- **Windows (64-bit)**: download `DSH-Desktop-*-win-x64-setup.exe`
-  - SmartScreen will warn about risk: click **More info → Run anyway**
+- **6 built-in preset plugins** (ready to use out of the box):
+  - `dshmarket` — the official plugin marketplace
+  - `dsh-plugin-version-manager` — plugin version management
+  - `dsh-shell-control` — terminal & command palette
+  - `dsh-desktop-preset-transfer` — preset plugin transfer (consistent presets across machines)
+  - `dsh-terminal` — system terminal (Shell)
+  - `dsh-market-tools` — **self-developed AI tool plugin** (market list/install/uninstall/update via 4 `market_*` tools, all forwarding to the official `/dsh-market/*` routes)
+- **Preset protection**: built-in plugins (`link:`/`file:` specs) are hard-blocked from uninstall/update to keep the preset chain intact.
+- **Multi-profile support**: manage multiple independent configurations (e.g. `web`, `web-desktop`) within one instance.
+- **Safe mode with self-healing**: when a plugin crashes, the app enters safe mode and removes the culprit; on restart it automatically tries to re-attach dropped preset plugins (when their deps are still present), logging `preset bundle re-attached after safe-mode drop`.
+- **Single-instance tray residency**: closing the window only minimizes to the system tray while background tasks keep running; the tray icon offers Show, Quit, Open log / Open data directory.
+- **Full local development pipeline**: TypeScript ESM + pnpm 11.22 + Vitest, with `just` commands for install / dev / package.
 
-Every release ships a `SHA256SUMS` manifest for verifying installer integrity.
+## 📦 Installation
 
-<details>
-<summary><strong>Downloads are slow or GitHub is unreachable?</strong></summary>
+This repository is **not yet published** (no `repository` field, no `Releases`). To run locally, follow the "Local development" section. If you have the source (e.g. shared directly by the maintainer), the local development steps below are all you need.
 
-Prefix the download URL with a GitHub acceleration proxy (e.g. `https://ghfast.top/`) and download with your browser, or seed the brew cache and install normally — the sha256 check still applies:
+## 🖥️ Usage
 
-```sh
-curl -L -o "$(brew --cache --cask foolgry/tap/dsh-desktop)" \
-  "https://ghfast.top/https://github.com/foolgry/dsh-desktop/releases/download/<tag>/DSH-Desktop-<version>-mac-arm64.dmg"
-brew install --cask foolgry/tap/dsh-desktop && xattr -cr "/Applications/DSH Desktop.app"
-```
+1. Unpack / clone the source locally
+2. Follow the "Local development" steps to install dependencies and start
+3. After launch, paste your [DeepSeek API Key](https://platform.deepseek.com/) in the tray icon or the settings page
+4. Start a conversation: let the AI read/write files, run commands, write code, and more
 
-Acceleration domains are third-party community services that come and go — swap in whichever works at the time. Integrity is guaranteed by `SHA256SUMS` plus the cask's built-in sha256, regardless of how the bytes were fetched. See the [docs](https://foolgry.github.io/dsh-desktop/guide/getting-started.html) for details.
+### Where data and logs live
 
-</details>
+- **App data directory** (conversations, config, sessions, plugin state, etc.): the system-standard location; it does not pollute your user home directory
+  - Windows: `%APPDATA%\DeepSeek Harness`
+  - macOS: `~/Library/Application Support/DeepSeek Harness`
+- **Diagnostic logs**: `logs/dsh.log` under the app data directory (first stop when troubleshooting)
+- **Tray menu**: open "Open log" and "Open data directory" directly
 
-The app checks for updates automatically (every 4 hours) after launch, and you can trigger a check manually anytime: macOS menu bar "DSH Desktop → 检查更新…", Windows window menu (press Alt to reveal) "Help → Check for Updates…", or the tray icon's "Check for Updates…" item:
+## ⚙️ How it works
 
-- **Windows**: the update downloads in the background; click "Restart and update" in the dialog to apply it, or it is installed automatically the next time the app quits
-- **macOS** (unsigned, so it cannot update itself): a dialog announces the new version. If the app was installed via Homebrew, "Update via Homebrew" runs `brew upgrade --cask dsh-desktop` + `xattr -cr` for you and restarts the app; otherwise a button opens the Releases page for a manual download
+1. **Embedded Node runtime**: uses the Node.js bundled with Electron plus the officially published [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) package — **it installs nothing on your system**; online marketplace installs are handled by a bundled standalone pnpm, so no system Node / npm is needed either.
+2. **Local `dsh web` service**: on startup it launches `dsh web` on `127.0.0.1` (port 3080 by default; if occupied, it tries 3081, 3082...), listening only on the loopback address and never exposed externally.
+3. **Native window**: an Electron `BrowserWindow` renders the local UI for a desktop-app feel, with a single-instance lock so only one window exists (a second launch focuses the existing one).
+4. **System tray**: when the window is minimized to the tray, the background `dsh web` process and all tasks keep running; click the tray icon → "Show" to restore, "Quit" to truly exit (which also shuts down the child process).
 
-## Usage
+## 🧱 Tech stack & toolchain
 
-1. Open **DSH Desktop** after installation
-2. Enter your [DeepSeek API Key](https://platform.deepseek.com/) in the settings of the interface (same as the web version)
-3. Start a conversation and let the AI complete tasks for you
+| Aspect | Choice | Notes |
+|--------|--------|-------|
+| Runtime | Electron 43 (embedded Node 22/24) | No system Node required |
+| Language | TypeScript, ESM (`"type": "module"`) | `target: ES2022`, `moduleResolution: NodeNext`, `strict` |
+| Package manager | **pnpm 11.22.0** (hoisted mode) | See key constraints; **never use npm**; version must align with `@pnpm/exe` |
+| Task runner | **just** (`justfile`) | Prefer just for all commands |
+| Packaging | electron-builder 26 | macOS (dmg+zip) and Windows (nsis) installers |
+| Auto-update | electron-updater (when packaged) | Checks every 4h + manual menu/tray "Check for Updates…"; Windows downloads in background then prompts "Restart and update", macOS (unsigned) uses Homebrew (if brew-installed) or a manual Releases download (when available) |
+| Upstream sync | `scripts/sync-upstream.mjs` + GitHub Actions | Polls npm at 09/13/17 Beijing time daily (reads all dist-tags for the max semver; upstream rc publishes `next` first, then moves `latest`); a build ships when either upstream or this repo moves |
 
-Your data (conversations, configuration, sessions) is stored in the system application data directory and does not pollute your user directory. Logs are in `logs/dsh.log` under the same directory; both the log and the data directory are reachable from the tray menu.
+### Common just commands
 
-## How it works
-
-- The app bundles the Node.js runtime that ships with Electron and the officially published [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) package — **it installs nothing on your system**. Online plugin installs from the marketplace are handled by a bundled standalone pnpm, so they need no system Node / npm / Homebrew either
-- On startup it launches a `dsh web` service on the loopback address (port 3080 by default; if occupied, it automatically tries 3081, 3082…), listening only on `127.0.0.1` and never exposed externally
-- A native window loads this interface, giving an experience consistent with a desktop app
-- **Closing the window does not quit the app**: the × button minimizes to the system tray and running tasks continue in the background; click the tray icon (or "Show DSH Desktop" in its menu) to reopen the window, and use the tray menu's "Quit" (or Cmd+Q on macOS) to exit completely
-
-## What we deliberately don't do
-
-Scope is a feature. This project stays a minimal desktop shell around the official UI:
-
-- **No fork, no patched upstream**: it always runs the officially published `@deepseek-ai/dsh` and follows new releases daily — you get exactly the same, latest official capability that CLI users get, not a repackaged fork that slowly rots
-- **No UI rework**: the window shows the official Web UI untouched. Skins, terminals, sidebars and other enhancements belong to the plugin ecosystem (a marketplace is built in) — you choose what to install; the shell doesn't decide for you
-- **Nothing installed on your system**: no Node, no PATH edits, no system config; everything lives in the app's own data directory and is gone when you uninstall
-- **No version pinning**: there is no "stay on an old release" option. If an upstream release misbehaves, a fixed build usually lands within a day; the CLI is the interim fallback
-
-If you want a built-in terminal, skins, or multi-version management, heavier community clients exist (e.g. [EAC](https://github.com/zouyuxuan122/Deepseek-Harness-EAC), [anywhere-labs' DSH Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop)) — different trade-offs, pick what fits.
-
-## Automatic sync and packaging
-
-[sync-and-release.yml](.github/workflows/sync-and-release.yml) runs automatically at **09:00 / 13:00 / 17:00 Beijing time every day**:
-
-1. Checks whether npm has a new version of `@deepseek-ai/dsh`; skips if not
-2. On a new version: updates the dependency, tags the commit, builds macOS (dmg + zip) and Windows (nsis) installers, and publishes them to Releases
-
-The desktop version number tracks upstream: `0.1.0-rc.6.6` means "the 6th desktop build based on upstream `0.1.0-rc.6`".
-
-## Local development
-
-Requires Node.js `^22.19 || >=24`, [pnpm](https://pnpm.io), and [just](https://just.systems).
-
-```sh
-just install    # install dependencies
+```bash
+just install    # install dependencies (pnpm install)
 just dev        # compile and run the app from source
-just sync       # check for a new upstream version and update
-just dist-mac   # build the macOS installer into dist-installer/
-just dist-win   # build the Windows installer (on Windows/CI)
+just build      # type-check and compile the main process into dist/
+just sync       # check for a new @deepseek-ai/dsh version and bump it (no commit)
+just dist-mac   # build the macOS installer into dist-installer/ (dmg + zip)
+just dist-win   # build the Windows installer (nsis; run on Windows / CI)
 ```
 
-## License
+The underlying equivalent commands live in `package.json` `scripts`: `build` / `dev` / `pack` / `dist:mac` / `dist:win`.
 
-Desktop shell code: MIT. DeepSeek Harness itself is MIT © DeepSeek; third-party notices for bundled dependencies are in the upstream `THIRD_PARTY_NOTICES.md`.
+## 🔐 Key constraints (read before changing)
+
+1. **Use pnpm, not npm.** The repo pins **pnpm 11.22.0**; do not switch to npm.
+2. **`node_modules` must stay hoisted.** `pnpm-workspace.yaml` sets `nodeLinker: hoisted` so electron-builder can walk a flat dependency tree. **Do not change to pnpm's default virtual-store symlink layout**, or packaging will drop files.
+3. **Peer-only runtime deps are maintained by script; don't delete them manually.** Some `@deepseek-ai/*` packages appear only in `peerDependencies`, and electron-builder's production collector **only reads `dependencies`/`optionalDependencies`**, missing pure-peer packages. `sync-upstream.mjs`'s `detectPeerOnlyRuntimeDeps()` pins them into `dependencies` on bump. By design it's **add-only** — keeping a package that later becomes a real dep is harmless, but deleting one may leave dangling references after a rename.
+4. **Keep `minimumReleaseAgeExclude` as the `'@deepseek-ai/*'` wildcard**, don't pin per-package versions. pnpm's default 24h minimum-release-age check would conflict with this repo's hours-close upstream tracking, so the whole first-party scope is exempt. In the rc.6 era this was a ~190-line `name@version` list; after sync bumped to rc.7 the list went stale and every CI `pnpm install --frozen-lockfile` failed (`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`). A sync that pushed a tag but whose build failed leaves an orphaned tag with no release — CI now detects "latest tag has no release" and auto-forces a rebuild, so no manual `gh run rerun --failed` is needed, though the orphaned tag itself stays in the list.
+5. **The entire `node_modules` must be `asarUnpack`'d.** `dsh web` is executed as a subprocess entry path, and paths inside the asar archive cannot be spawned. Hence `electron-builder.yml` sets `asarUnpack: node_modules/**`, and `dshBin()` rewrites the `app.asar` path to `app.asar.unpacked`.
+6. **Don't hand-edit the version number.** The desktop version is computed by `nextVersion()`:
+   - Upstream prerelease (e.g. `0.1.0-rc.6`) → append a UTC build timestamp: `0.1.0-rc.6.202508151030`. Fixed-width `YYYYMMDDHHMM` (12 digits) keeps tag lexicographic order equal to time order — a plain incrementing counter would put `rc.6.9` lexicographically before `rc.6.11` at the 9→10 carry.
+   - Upstream stable (e.g. `0.1.0`) → a separate patch line `X.Y.(Z+1)`.
+   - Must be strictly increasing and valid semver (required by electron-updater).
+7. **macOS builds are unsigned / unnotarized.** CI sets `CSC_IDENTITY_AUTO_DISCOVERY=false`. Users first-open via right-click → Open; if it says "damaged and can't be opened", run `xattr -cr "/Applications/DSH Desktop.app"`. The Homebrew channel is provided by a separate repository (cask `dsh-desktop`, arm64 only) whose sync-cask tracks this repo's latest release daily; **when the artifact filename (`DSH-Desktop-<version>-mac-arm64.dmg`) changes you must sync the cask's `url`**. Artifact filenames must contain no spaces: a space in `${productName}` makes electron-builder write a hyphenated safeArtifactName into latest.yml while `gh release` uploads convert spaces to dots — the mismatch breaks update downloads (404).
+8. **This is an ESM project; use NodeNext-style imports.** E.g. in `.mjs` scripts use `import.meta.url` + `createRequire`. `@deepseek-ai/dsh` has no `exports` map, so `dshBin()` does `require.resolve('@deepseek-ai/dsh/lib/bin.js')` directly.
+9. **`@pnpm/exe` (the marketplace's embedded pnpm) has three pitfalls, read before changing.** ① Its npm tarball's SEA binary **carries no exec bit**, and setup.js's hardlink doesn't add one — the runtime `chmodSync` in `toolingPathPrefix()` is required; don't delete it. ② The SEA binary requires a `dist/pnpm.mjs` in the same directory, so PATH must point at the `@pnpm/exe` package directory, not the platform packages such as `@pnpm/macos-arm64`. ③ Its `bin` shadows corepack at `node_modules/.bin/pnpm`, and when electron-builder's dependency collector spawns pnpm it hits this — **the `packageManager` field must match the `@pnpm/exe` version** (currently 11.22.0) or the collector fails on a version mismatch. It also grows the dmg from ~153MB to ~237MB; watch the size on bumps.
+
+## 📂 Repository structure
+
+```
+src/main.ts                 # Electron main process (the only runtime source, ~230 lines)
+src/profiles.js             # Profile management (activeProfile, ensureProfileSeed, PROFILES, etc.)
+src/safe-mode.ts            # Safe mode (plugin-crash removal & self-healing)
+src/preset-deps.ts          # Preset plugin dep handling (presetDepSpec / migratePresetDepSpecs / repairPresetDepSpecs / adoptNewPresets / healDroppedPresetBundles)
+scripts/sync-upstream.mjs   # Upstream version detection + desktop version calc + peer-only dep pin
+build/icon.{icns,ico,png}   # App icon
+electron-builder.yml        # Packaging config (appId, target, asarUnpack, publish)
+pnpm-workspace.yaml         # pnpm config (hoisted + allowBuilds whitelist)
+.github/workflows/sync-and-release.yml  # 3-stage CI: sync → build(mac/win) → release
+dist/                       # tsc output (gitignored)
+dist-installer/             # electron-builder output (gitignored)
+plugins/                    # Self-developed / built-in plugin source (e.g. dsh-market-tools, dsh-desktop-preset-transfer; dsh-plugin-market is a retired old self-made market fork, archived for reference only, not in the preset chain)
+tests/                      # Vitest unit tests (dependency-safety, market-tools, preset-deps, etc.)
+```
+
+## 🛡️ Plugin marketplace & preset protection
+
+- The marketplace is provided by the built-in `@deepseek-ai/dshmarket`, reachable via the in-app marketplace panel or `http://127.0.0.1:<PORT>/dsh-market/*` (cookie + Origin auth required).
+- **Preset plugins are injected into the profile via `link:`/`file:` specs** (e.g. `link:J:/.../node_modules/dsh-market-tools`); this is the official mechanism: **uninstalling or updating them breaks the preset chain** (uninstall re-triggers the self-heal on every launch; update has an unclear origin). So the `market_uninstall` / `market_update` tools hard-block locally:
+  - When the target plugin's `spec` starts with `link:` or `file:` → immediately return `{ok:false, blocked:true}`, **no uninstall/update request is sent**
+  - The tool descriptions also state explicitly: "preset plugins (spec starting with link:/file:) are rejected — do not try to uninstall or update them"
+- This ensures the 6 built-in preset plugins (market, version manager, terminal control, preset transfer, terminal, market tools) can never be uninstalled or updated unless the user explicitly edits the profile and accepts the consequences.
+
+## 🧪 Quality gates
+
+- **Unit tests**: Vitest 8 files 46 cases (incl. 14 new `market-tools.*`), all passing
+- **Type check**: `tsc --noEmit` 0 errors
+- **Plugin self-tests**: node:test 4/4
+- **Architecture check**: deps=40 probed=38 failed=0
+- **Build**: `pnpm build` succeeds
+- **Smoke test**: ci-smoke authenticated ready
+
+## 📄 License
+
+- Desktop shell code: MIT
+- Upstream DeepSeek Harness: MIT © DeepSeek
+- Packaged third-party deps: see upstream `THIRD_PARTY_NOTICES.md`
+
+## 🙋‍♂️ Local development
+
+> Prereqs: Node.js `^22.19 || >=24`, [pnpm](https://pnpm.io) (11.22.0), [just](https://just.systems)
+
+```bash
+# 1. Install dependencies (first time or after a lockfile change)
+just install          # equivalent to pnpm install
+
+# 2. Run from source (recommended for debugging)
+just dev              # compile with tsc, then launch the Electron app from source
+
+# 3. Type-check only (fast feedback)
+just build            # tsc compile, no launch
+
+# 4. Check for a new upstream version (no commit)
+just sync             # bumps the "@deepseek-ai/dsh" version in package.json if a new one exists
+
+# 5. Build distributables (run on the matching platform)
+just dist-mac         # on macOS: produce dmg + zip into dist-installer/
+just dist-win         # on Windows or CI: produce an nsis installer into dist-installer/
+```
+
+### Common debugging tips
+
+- App logs default to `logs/dsh.log` under the system app-data directory (**first stop when troubleshooting**)
+- Stuck on a white screen → check the log tail for `dsh web started on port ...` or a child-process abnormal exit
+- Marketplace install hangs → check the log the same way, or confirm the network can reach `https://awesome-dsh-plugin.com` (the marketplace catalog source)
+- Single-instance behavior: a second launch focuses the existing window (even when minimized to the tray); the only true exit is the tray → "Quit"
+
+---
+
+> This README is the authoritative description of the current repository (`dsh-desktop-unified`). For the upstream DeepSeek Harness itself, see [https://github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).

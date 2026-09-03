@@ -10,14 +10,8 @@ hero:
     alt: DSH Desktop
   actions:
     - theme: brand
-      text: Download
-      link: https://github.com/foolgry/dsh-desktop/releases
-    - theme: alt
       text: Quick Start
       link: /guide/getting-started
-    - theme: alt
-      text: View on GitHub
-      link: https://github.com/foolgry/dsh-desktop
 
 features:
   - icon: ⚡

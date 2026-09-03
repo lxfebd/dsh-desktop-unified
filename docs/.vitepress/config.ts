@@ -13,10 +13,10 @@ export default defineConfig({
   description:
     'Download-and-run desktop build of DeepSeek Harness. No Node.js, npm, or terminal required.',
 
-  // GitHub Pages serves this as a project site under /dsh-desktop/, so all
+  // GitHub Pages serves this as a project site under /dsh-desktop-unified/, so all
   // asset and router URLs must be prefixed with that subpath. Without this the
   // page renders as unstyled HTML (CSS/JS 404 at the domain root).
-  base: '/dsh-desktop/',
+  base: '/dsh-desktop-unified/',
 
   head: [['link', { rel: 'icon', type: 'image/png', href: '/icon.png' }]],
 
@@ -27,9 +27,7 @@ export default defineConfig({
       lang: 'en',
       themeConfig: {
         nav: [
-          { text: 'Guide', link: '/guide/getting-started' },
-          { text: 'Releases', link: 'https://github.com/foolgry/dsh-desktop/releases' },
-          { text: 'GitHub', link: 'https://github.com/foolgry/dsh-desktop' }
+          { text: 'Guide', link: '/guide/getting-started' }
         ],
         sidebar: {
           '/guide/': [
@@ -43,9 +41,6 @@ export default defineConfig({
             }
           ]
         },
-        socialLinks: [
-          { icon: 'github', link: 'https://github.com/foolgry/dsh-desktop' }
-        ],
         footer: {
           message: 'Community (unofficial) build — not an official DeepSeek product.',
           copyright: 'MIT License'
@@ -60,9 +55,7 @@ export default defineConfig({
       link: '/zh/',
       themeConfig: {
         nav: [
-          { text: '指南', link: '/zh/guide/getting-started' },
-          { text: 'Releases', link: 'https://github.com/foolgry/dsh-desktop/releases' },
-          { text: 'GitHub', link: 'https://github.com/foolgry/dsh-desktop' }
+          { text: '指南', link: '/zh/guide/getting-started' }
         ],
         sidebar: {
           '/zh/guide/': [
@@ -76,9 +69,6 @@ export default defineConfig({
             }
           ]
         },
-        socialLinks: [
-          { icon: 'github', link: 'https://github.com/foolgry/dsh-desktop' }
-        ],
         footer: {
           message: '社区（非官方）构建，非 DeepSeek 官方产品。',
           copyright: 'MIT 协议'

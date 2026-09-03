@@ -192,7 +192,7 @@ jobs:
           EOF
           sed -i "s/UPSTREAM_VERSION/${{ needs.sync.outputs.upstream_version }}/g" notes.md
           gh release create "v${{ needs.sync.outputs.version }}" \
-            --repo foolgry/dsh-desktop \
+            --repo "$GITHUB_REPOSITORY" \
             --title "v${{ needs.sync.outputs.version }}" \
             --notes-file notes.md \
             "${files[@]}"
