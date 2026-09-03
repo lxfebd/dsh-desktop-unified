@@ -67,6 +67,7 @@ import {
   stopShellControl,
   type ShellPrefs,
 } from './shell-control.js'
+import { migratePresetDepSpecs, presetDepSpec, type PresetPlugin } from './preset-deps.js'
 
 /** First port tried for the dsh web server. */
 const FIRST_PORT = 3080
@@ -323,8 +324,9 @@ function ensurePluginSymlink(link: string, target: string): void {
 
 /**
  * Preset {@link PRESET_PLUGINS} into the web profile before `dsh web` boots:
- * append each to `dsh.profile.bundles` (with a `dependencies` entry, matching
- * what `dsh plugin add` reconciles) and link it into the flat module fallback
+ * append each to `dsh.profile.bundles` (with a `link:` `dependencies` entry
+ * pointing at the bundled directory — never a registry range, see
+ * `preset-deps.ts`) and link it into the flat module fallback
  * `$DSH_HOME/profiles/node_modules`. The fallback link is required: dsh's
  * healProfilesModuleFallback only links packages from the dsh app's own
  * dependency closure, which preset plugins are not part of, while the Loader
@@ -337,14 +339,20 @@ function ensurePluginSymlink(link: string, target: string): void {
 function presetBundledPlugins(): void {
   try {
     const marker = presetMarkerFile()
-    if (existsSync(marker)) return
-    const plugins = PRESET_PLUGINS.map((name) => {
+    const plugins: PresetPlugin[] = PRESET_PLUGINS.map((name) => {
       const dir = bundledPluginDir(name)
       const version = (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: string }).version ?? '0.0.0'
       return { name, dir, version }
     })
     const profileDir = join(dshHome(), 'profiles', activeProfile())
     const manifestPath = join(profileDir, 'package.json')
+    if (existsSync(marker)) {
+      // Profiles created before preset deps became local links list the
+      // presets as registry ranges — pnpm then aborts EVERY market install
+      // on the unpublished names (ERR_PNPM_FETCH_404). Self-heal every boot.
+      repairPresetDepSpecs(manifestPath, plugins)
+      return
+    }
     mkdirSync(profileDir, { recursive: true })
     let manifest: ProfileManifest
     if (existsSync(manifestPath)) {
@@ -373,7 +381,7 @@ function presetBundledPlugins(): void {
       }
       manifest.dependencies ??= {}
       if (manifest.dependencies[plugin.name] === undefined) {
-        manifest.dependencies[plugin.name] = `^${plugin.version}`
+        manifest.dependencies[plugin.name] = presetDepSpec(plugin)
         changed = true
       }
     }
@@ -389,6 +397,30 @@ function presetBundledPlugins(): void {
   } catch (error) {
     appendFileSync(logFile(), `\n=== preset bundled plugins failed: ${error instanceof Error ? error.message : String(error)} ===\n`)
   }
+}
+
+/**
+ * Re-point the active profile manifest's preset dependency entries at the
+ * bundled local links, in place (see `preset-deps.ts`). Runs on every boot
+ * even when the preset marker is already set: the legacy registry-range
+ * format breaks every market install, and the app's own directory can move
+ * between launches (update, disk move). No-ops when nothing is stale.
+ * @param manifestPath - the active profile's package.json
+ * @param plugins - the preset plugins as bundled right now
+ */
+function repairPresetDepSpecs(manifestPath: string, plugins: PresetPlugin[]): void {
+  if (!existsSync(manifestPath)) return
+  let manifest: ProfileManifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ProfileManifest
+  } catch {
+    // Unreadable manifest: repairing cannot improve it; leave it alone.
+    return
+  }
+  const changed = migratePresetDepSpecs(manifest.dependencies, plugins, (dir) => existsSync(join(dir, 'package.json')))
+  if (changed.length === 0) return
+  writeFileSync(manifestPath, JSON.stringify(manifest, undefined, 2) + '\n')
+  appendFileSync(logFile(), `\n=== preset dep specs migrated to local links: ${changed.join(', ')} ===\n`)
 }
 
 /**
