@@ -162,6 +162,4 @@ just dist-win         # 在 Windows 上或 CI：生成 nsis 安装包到 dist-in
 
 ---
 
-> 本 README 为当前仓库（dsh-desktop-unified）的权威说明。如需了解上游 DeepSeek Harness 本体，请访问 [https://github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。  
->
-> 如你在使用中遇到问题或有改进建议，欢迎在本仓库的 Issues 区反馈（注：本仓库目前不对外开放 Issues，仅作内部交流使用）。
+> 本 README 为当前仓库（dsh-desktop-unified）的权威说明。如需了解上游 DeepSeek Harness 本体，请访问 [https://github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。
