@@ -1,7 +1,7 @@
 // dsh-terminal · client.js（纯 JS，无 JSX/TSX）
 // 官方 banner/footer 包装：window.__ModuleLoader__.load({ id, factory: (require) => { ... return module.exports } })
 // 工厂里 require('react') / require('@deepseek-ai/dsh-client-ui-primitives') 从 shell 的 static module table 拿
-// UI 组合走官方 ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(...)) 注入 React 组件
+// UI 组合走官方 ctx.slots.inject('settings.section', () => ctx.slots.register(...)) 注入 React 组件
 // CSS 只用 --dsw-alias-* token，i18n 走 ctx.locale.register + props.t
 window.__ModuleLoader__.load({
 	id: "dsh-terminal",
@@ -127,9 +127,8 @@ window.__ModuleLoader__.load({
 			}
 
 			useEffect(function () {
-				if (!props.open) return undefined;
 				return openStream();
-			}, [props.open]);
+			}, []);
 
 			useEffect(function () {
 				var el = outRef.current;
@@ -144,13 +143,8 @@ window.__ModuleLoader__.load({
 				postJson("input", { text: text + "\n" });
 			}, [input]);
 
-			return React.createElement(Modal, {
-				open: props.open,
-				onClose: props.onClose,
-				title: t("title"),
-				closeLabel: t("close"),
-				className: "dterm-dialog",
-			},
+			return React.createElement("div", { style: { padding: "0 0 8px" } },
+				React.createElement("div", { style: { fontSize: 15, fontWeight: 600, color: "var(--dsw-alias-label-primary)", margin: "4px 0 2px" } }, t("title")),
 				React.createElement("p", { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary)", margin: "0 0 10px" } }, t("subtitle")),
 				React.createElement("div", { ref: outRef, className: "dterm-out" }, lines.length ? lines.join("") : " "),
 				React.createElement("div", { className: "dterm-row" },
@@ -174,24 +168,22 @@ window.__ModuleLoader__.load({
 
 		function TerminalRoot(props) {
 			var t = props.t;
-			var [open, setOpen] = useState(false);
 			insertCss();
-			return React.createElement(React.Fragment, null,
-				React.createElement(FabButton, { t: t, onOpen: function () { setOpen(true); } }),
-				React.createElement(TerminalPanel, { t: t, open: open, onClose: function () { setOpen(false); } })
-			);
+			return React.createElement(TerminalPanel, { t: t });
 		}
 
-		// ---- apply：注册 i18n 字典 + 通过 ctx.slots.inject 注入 sidebar.footer.action ----
+		// ---- apply：注册 i18n 字典 + 通过 ctx.slots.inject 注入 settings.section ----
 		var inject = ["slots", "locale"];
 		function apply(ctx) {
 			ctx.effect(function () {
 				return ctx.locale.register(NS, { zh: zh, en: en });
 			}, "dsh-terminal: dictionaries");
-			ctx.slots.inject("sidebar.footer.action", function () {
+			ctx.slots.inject("settings.section", function () {
 				return ctx.slots.register({
-					name: "sidebar.footer.action",
+					name: "settings.section",
 					id: "dsh-terminal",
+					order: 43,
+					label: function () { return ctx.locale.bind(NS)("fabLabel"); },
 					locale: NS,
 				}, TerminalRoot);
 			});

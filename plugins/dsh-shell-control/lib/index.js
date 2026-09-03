@@ -16,20 +16,19 @@ function portFile() {
   return join(dshHome(), 'shell', 'control-port.json')
 }
 
-/** 发现 shell-control 端口：先读 control-port.json，失败则探测默认端口。 */
+/** 发现 shell-control 端口与鉴权 token：先读 control-port.json，失败则探测默认端口（此时无 token 无法通过鉴权，探测返回 null 由调用方提示）。 */
 let cachedPort = null
+let cachedToken = ''
 async function shellPort() {
   if (cachedPort) return cachedPort
   try {
-    const { port } = JSON.parse(readFileSync(portFile(), 'utf8'))
-    if (port) { cachedPort = port; return port }
+    const info = JSON.parse(readFileSync(portFile(), 'utf8'))
+    if (info.port) {
+      cachedPort = info.port
+      cachedToken = typeof info.token === 'string' ? info.token : ''
+      return cachedPort
+    }
   } catch { /* 落盘文件不存在，走探测 */ }
-  for (const p of [3177, 3178, 3179, 3180]) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${p}/api/shell/state`, { signal: AbortSignal.timeout(1500) })
-      if (r.ok) { cachedPort = p; return p }
-    } catch { /* 继续探测 */ }
-  }
   return null
 }
 
@@ -41,11 +40,20 @@ async function callShell(path, opts = {}) {
   }
   const timeout = opts.timeout ?? 10000
   try {
+    const headers = { 'content-type': 'application/json', ...(opts.headers || {}) }
+    // H3 修复：随请求携带鉴权 token（Authorization: Bearer）
+    if (cachedToken) headers['authorization'] = `Bearer ${cachedToken}`
     const r = await fetch(`http://127.0.0.1:${port}${path}`, {
       ...opts,
-      headers: { 'content-type': 'application/json', ...(opts.headers || {}) },
+      headers,
       signal: AbortSignal.timeout(timeout),
     })
+    if (r.status === 401) {
+      // token 失效（服务重启换新），重置缓存下次重读
+      cachedPort = null
+      cachedToken = ''
+      return { ok: false, error: '外壳鉴权失败（token 已过期），请重启外壳控制服务后重试。' }
+    }
     const text = await r.text()
     try { return JSON.parse(text) } catch { return { ok: false, error: '外壳返回非 JSON: ' + text.slice(0, 200) } }
   } catch (e) {
@@ -87,7 +95,8 @@ async function proxyToShell(shellPath, req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     opts.body = JSON.stringify(await readBody(req))
   }
-  const result = await callShell(shellPath, opts)
+  // 服务端 ROUTES 只注册 /api/shell/xxx 全路径，转发时必须补回前缀
+  const result = await callShell('/api/shell' + shellPath, opts)
   sendJson(res, 200, result)
 }
 

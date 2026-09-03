@@ -12,6 +12,7 @@
 import { app, BrowserWindow } from 'electron'
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
+import { randomBytes } from 'node:crypto'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { applyShellIcon, readIconMeta, resetShellIcon, ensureShellIcon } from './shell-icon.js'
@@ -73,6 +74,37 @@ export function savePrefs(p: ShellPrefs): void {
 let server: Server | undefined
 let boundPort = 0
 
+/** H3 修复：请求鉴权 token（每次启动随机生成，写入 control-port.json 供插件读取）。 */
+let authToken = ''
+
+function generateToken(): string {
+  return randomBytes(24).toString('hex')
+}
+
+/**
+ * H3 修复：判断请求 Origin 是否来自受信任的回环页面（Electron Renderer / 本地侧边栏）。
+ * 非白名单 Origin 一律不返回 CORS 放行头（浏览器读取不到响应），鉴权仍由 token 兜底。
+ */
+function isTrustedOrigin(origin: string | undefined): boolean {
+  if (!origin) return false
+  try {
+    const u = new URL(origin)
+    if (u.protocol !== 'http:') return false
+    return u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]'
+  } catch {
+    return false
+  }
+}
+
+/** H3 修复：请求必须携带 Bearer token（Authorization 或 x-dsh-shell-token 均可）。 */
+function authorized(req: IncomingMessage): boolean {
+  if (!authToken) return false
+  const bearer = req.headers['authorization']
+  if (typeof bearer === 'string' && bearer === `Bearer ${authToken}`) return true
+  const header = req.headers['x-dsh-shell-token']
+  return typeof header === 'string' && header === authToken
+}
+
 /** 取实际监听端口（供 main.ts 落盘/日志；插件读 control-port.json 发现）。 */
 export function currentPort(): number {
   return boundPort
@@ -86,14 +118,20 @@ export type RecreateWindow = (prefs: ShellPrefs) => void
 
 function sendJson(res: ServerResponse, code: number, obj: unknown): void {
   const body = JSON.stringify(obj)
-  res.writeHead(code, {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-DSH-Shell-Token',
     'Cache-Control': 'no-store',
-    'Content-Length': Buffer.byteLength(body),
-  })
+    'Content-Length': String(Buffer.byteLength(body)),
+  }
+  // H3 修复：仅对受信任 Origin 回显 CORS 放行，不再无条件 '*'（本机任意网页将无法读取响应）
+  const req = (res as unknown as { req?: IncomingMessage }).req
+  const origin = req?.headers.origin
+  if (origin && isTrustedOrigin(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin
+  }
+  res.writeHead(code, headers)
   res.end(body)
 }
 
@@ -270,15 +308,25 @@ export async function startShellControl(
 ): Promise<void> {
   const port = await pickPort()
   boundPort = port
-  writeFileSync(portFile(), JSON.stringify({ port, startedAt: new Date().toISOString() }) + '\n')
+  authToken = generateToken()
+  writeFileSync(portFile(), JSON.stringify({ port, token: authToken, startedAt: new Date().toISOString() }) + '\n')
   server = createServer((req, res) => {
+    const origin = req.headers.origin
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
+      const trusted = origin && isTrustedOrigin(origin)
+      const headers: Record<string, string> = {
         'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-      })
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-DSH-Shell-Token',
+        'Access-Control-Max-Age': '3600',
+      }
+      if (trusted) headers['Access-Control-Allow-Origin'] = origin
+      res.writeHead(204, headers)
       res.end()
+      return
+    }
+    // H3 修复：所有非 OPTIONS 请求必须先通过 token 鉴权
+    if (!authorized(req)) {
+      sendJson(res, 401, { error: 'unauthorized' })
       return
     }
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
@@ -288,7 +336,7 @@ export async function startShellControl(
     void safe(handler)(ctx).catch(() => { /* safe 已处理 */ })
   })
   server.listen(port, '127.0.0.1')
-  appendFileSync(logFile(), `\n=== shell-control listening on 127.0.0.1:${port} ===\n`)
+  appendFileSync(logFile(), `\n=== shell-control listening on 127.0.0.1:${port} (auth enabled) ===\n`)
 }
 
 /**

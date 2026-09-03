@@ -1,27 +1,43 @@
 // 隐藏窗口的 pnpm 执行器：spawnSync 不传 shell，windowsHide:true 避免弹 cmd 黑框
 const { spawnSync } = require('child_process');
 const { readFileSync, writeFileSync, existsSync } = require('fs');
-const { join } = require('path');
+const { join, dirname } = require('path');
 
 var cwd = process.argv[2];
 var args = process.argv.slice(3);
+
+// H4 修复：优先使用桌面壳注入的内置 pnpm（DSH_BUNDLED_PNPM_DIR 指向 @pnpm/exe 目录，
+// main.ts 在启动 dsh 子进程时注入），避免依赖系统 PATH 中的 pnpm —— 与"免装 Node/pnpm"承诺一致。
+function resolvePnpm() {
+  var bundledDir = process.env.DSH_BUNDLED_PNPM_DIR;
+  if (bundledDir) {
+    var bin = join(bundledDir, process.platform === 'win32' ? 'pnpm.exe' : 'pnpm');
+    if (existsSync(bin)) return bin;
+  }
+  // 回退：尝试从当前模块向上查找就近的 pnpm（dev 目录布局）
+  var probe = dirname(dirname(dirname(require.main ? require.main.filename : __filename)));
+  var local = join(probe, 'node_modules', '@pnpm', 'exe', process.platform === 'win32' ? 'pnpm.exe' : 'pnpm');
+  if (existsSync(local)) return local;
+  return 'pnpm';
+}
 
 // 先读 before 用于 reconcile
 var pkgFile = join(cwd, 'package.json');
 var before = {};
 try { before = JSON.parse(readFileSync(pkgFile, 'utf8')); } catch {}
 
-var result = spawnSync('pnpm', args, {
+var pnpmBin = resolvePnpm();
+var spawnResult = spawnSync(pnpmBin, args, {
   cwd: cwd,
   windowsHide: true,
   stdio: 'pipe',
-  shell: process.platform === 'win32',
+  shell: process.platform === 'win32' && pnpmBin === 'pnpm',
 });
 
-process.stdout.write(result.stdout || '');
-process.stderr.write(result.stderr || '');
+process.stdout.write(spawnResult.stdout || '');
+process.stderr.write(spawnResult.stderr || '');
 
-var exitCode = result.status !== null ? result.status : (result.error ? 1 : 0);
+var exitCode = spawnResult.status !== null ? spawnResult.status : (spawnResult.error ? 1 : 0);
 
 // 成功后 reconcile：把有 dsh.bundle.patch 的依赖加入 bundles
 if (exitCode === 0) {

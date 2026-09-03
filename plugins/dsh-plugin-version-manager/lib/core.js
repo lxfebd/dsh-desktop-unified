@@ -1,8 +1,8 @@
-﻿// dsh-plugin-version-manager · 核心逻辑
-// 所有命令走「官方 dsh bin」，不另装 dsh 副本：
+// dsh-plugin-version-manager · 核心逻辑
+// 所有命令走「官方 dsh bin / 内置 pnpm」，不另装 dsh 副本：
 //   - 版本查询：npm view @deepseek-ai/dsh dist-tags
-//   - 升级：npm install -g @deepseek-ai/dsh@<tag>
-//   - 补丁：直接改安装树里的文件
+//   - 升级：对桌面实际运行的目录（桌面内置 dsh 或 workbuddy/全局）执行 install
+//   - 补丁：已停用（历史版本直改安装树源码，违反核心原则，见 applyPatches）
 'use strict'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -16,6 +16,18 @@ const NPM_ARGS = process.platform === 'win32' ? ['/c', 'npm'] : []
 
 /** 内置 node 目录（桌面壳启动时前置到 PATH，并写入 BUNDLED_NODE_DIR） */
 const BUNDLED_NODE = process.env.BUNDLED_NODE_DIR || ''
+
+/** 内置 pnpm 所在目录（桌面壳启动时写入 DSH_BUNDLED_PNPM_DIR，指向 @pnpm/exe 目录） */
+const BUNDLED_PNPM_DIR = process.env.DSH_BUNDLED_PNPM_DIR || ''
+
+/** 定位 pnpm 可执行文件（优先内置 pnpm，其次系统 PATH） */
+function pnpmBin() {
+  if (BUNDLED_PNPM_DIR) {
+    const bin = path.join(BUNDLED_PNPM_DIR, process.platform === 'win32' ? 'pnpm.exe' : 'pnpm')
+    if (fs.existsSync(bin)) return { bin, args: [] }
+  }
+  return { bin: process.platform === 'win32' ? (process.env.COMSPEC || 'cmd.exe') : 'pnpm', args: process.platform === 'win32' ? ['/c', 'pnpm'] : [] }
+}
 
 /** 解析 npm 执行方式：优先用内置 node 直接跑 npm-cli.js，避免依赖系统 npm */
 function npmInvoke(args) {
@@ -43,8 +55,17 @@ export async function queryTags() {
   }
 }
 
-/** 找到已安装的 dsh 安装树根目录 */
+/** 桌面壳注入的捆绑 dsh 包目录（main.ts 设置 DSH_DESKTOP_BUNDLED_DSH，指向随应用分发的捆绑副本）。 */
+function bundledDshRoot() {
+  const p = process.env.DSH_DESKTOP_BUNDLED_DSH
+  if (p && fs.existsSync(path.join(p, 'lib', 'bin.js'))) return p
+  return null
+}
+
+/** 找到已安装的 dsh 安装树根目录：优先桌面捆绑副本（与桌面实际运行实例一致），否则外部 CLI/全局。 */
 export function findDshRoot() {
+  const bundled = bundledDshRoot()
+  if (bundled) return bundled
   if (process.env.DSH_INSTALL_ROOT && fs.existsSync(path.join(process.env.DSH_INSTALL_ROOT, 'lib', 'bin.js'))) {
     return process.env.DSH_INSTALL_ROOT
   }
@@ -82,21 +103,24 @@ function findInstallPrefix(pkgDir) {
   return null
 }
 
-/** 升级 dsh 到指定通道。安装到实际运行目录（workbuddy 或全局），而非固定 npm 全局。 */
+/** 升级 dsh 到指定通道。安装到实际运行目录（桌面内置或 workbuddy/全局），而非固定 npm 全局。 */
 export async function upgradeTo(channel) {
   const tag = channel === 'explorer' ? 'next' : 'latest'
   const root = findDshRoot()
   if (!root) return { ok: false, error: '未找到已安装的 dsh' }
-  // root = .../node_modules/@deepseek-ai/dsh；安装目标是 node_modules 的上级（node 版本根目录）
+  // root = .../node_modules/@deepseek-ai/dsh；安装目标是 node_modules 的上级（应用根目录或 node 版本根目录）
   const installDir = findInstallPrefix(root)
   if (!installDir) return { ok: false, error: '无法解析安装前缀' }
+  const isBundled = bundledDshRoot() === root
   return new Promise((resolve) => {
-    const { bin, args } = npmInvoke(['install', '--prefix', installDir, `@deepseek-ai/dsh@${tag}`, '--no-audit', '--no-fund', '--progress=false'])
-    const child = spawn(bin, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    // 桌面内置 dsh：优先用内置 pnpm 更新应用内依赖，与桌面实际运行的捆绑实例保持一致
+    const { bin, args } = isBundled ? pnpmBin() : npmInvoke([])
+    const fullArgs = [...args, 'install', '--prefix', installDir, `@deepseek-ai/dsh@${tag}`, '--no-audit', '--no-fund', '--progress=false']
+    const child = spawn(bin, fullArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
     child.stdout.on('data', (d) => { out += d.toString() })
     child.stderr.on('data', (d) => { out += d.toString() })
-    child.on('error', (e) => resolve({ ok: false, error: 'npm 启动失败: ' + e.message }))
+    child.on('error', (e) => resolve({ ok: false, error: 'pnpm/npm 启动失败: ' + e.message }))
     child.on('close', (code) => {
       if (code === 0) {
         const root2 = findDshRoot()
@@ -107,22 +131,18 @@ export async function upgradeTo(channel) {
         resolve({ ok: true, version, applied })
       } else {
         const tail = out.split('\n').filter(Boolean).slice(-8).join('\n')
-        resolve({ ok: false, error: `npm install 失败 (${code}): ${tail}` })
+        resolve({ ok: false, error: `pnpm/npm install 失败 (${code}): ${tail}` })
       }
     })
   })
 }
 
-// ---- 补丁（真正需要的只有 scope Symbol.for 一条）----
-const PATCHES = [
-  {
-    id: 'scope-symbol-for',
-    label: 'dsh-scope · Symbol.for 修复',
-    file: ['../dsh-scope/lib/index.js', 'node_modules/@deepseek-ai/dsh-scope/lib/index.js'],
-    detect: (c) => /Symbol\(\s*['"]dsh\.scope['"]\s*\)/.test(c) && !/Symbol\.for\(\s*['"]dsh\.scope['"]\s*\)/.test(c),
-    apply: (c) => c.replace(/Symbol\(\s*(['"])dsh\.scope\1\s*\)/g, 'Symbol.for($1dsh.scope$1)'),
-  },
-]
+// ---- 补丁（H1 修复：不再直改 node_modules 源码）----
+// 说明：原 scope-symbol-for 补丁通过 fs.writeFileSync 直接改写
+// node_modules/@deepseek-ai/dsh-scope/lib/index.js，绕过官方 cordis.patch.yml 补丁层，
+// 违反「不 fork、不改源码、补丁走官方补丁层」核心原则，且升级后会被覆盖。
+// 此处停用该源码级补丁；如需符号共享修复，应通过官方补丁层 / 上游包修复，严禁恢复直改源码。
+const PATCHES = []
 
 /** 解析补丁目标文件：依次尝试候选相对路径，返回第一个存在的绝对路径 */
 function resolvePatchFile(root, candidates) {
@@ -146,16 +166,6 @@ export function checkPatches(root) {
 }
 
 export function applyPatches(root) {
-  return PATCHES.map((p) => {
-    const fp = resolvePatchFile(root, p.file)
-    try {
-      const content = fs.readFileSync(fp, 'utf8')
-      if (!p.detect(content)) return { id: p.id, label: p.label, ok: true, already: true }
-      fs.writeFileSync(fp, p.apply(content), 'utf8')
-      console.log('[dsh-plugin-version-manager] 补丁已应用:', p.id)
-      return { id: p.id, label: p.label, ok: true, file: fp }
-    } catch (e) {
-      return { id: p.id, label: p.label, ok: false, error: e.message }
-    }
-  })
+  // H1：已停用源码级补丁，返回空列表（接口保持兼容，不执行任何写文件操作）
+  return []
 }

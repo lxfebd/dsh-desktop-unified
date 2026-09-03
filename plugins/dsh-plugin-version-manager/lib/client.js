@@ -1,7 +1,7 @@
 // dsh-plugin-version-manager · client.js（纯 JS，无 JSX/TSX）
 // 官方 banner/footer 包装：window.__ModuleLoader__.load({ id, factory: (require) => { ... return module.exports } })
 // 工厂里 require('react') / require('@deepseek-ai/dsh-client-ui-primitives') 从 shell 的 static module table 拿
-// UI 组合走官方 ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register(...)) 注入 React 组件
+// UI 组合走官方 ctx.slots.inject('settings.section', () => ctx.slots.register(...)) 注入 React 组件
 // CSS 只用 --dsw-alias-* token，i18n 走 ctx.locale.register + props.t
 window.__ModuleLoader__.load({
 	id: "dsh-plugin-version-manager",
@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
 			upgrading: "升级中",
 			already: "已是该版本",
 			patches: "补丁状态",
-			patchesHint: "升级后自动重打；也可手动重打",
+			patchesHint: "已停用源码级补丁（遵守官方补丁层）",
 			repatch: "重打补丁",
 			patchOk: "已生效",
 			patchNeed: "需要重打",
@@ -41,7 +41,7 @@ window.__ModuleLoader__.load({
 			open: "打开面板",
 			close: "关闭",
 			version: "版本",
-			note: "提示：升级会调用 npm install -g 替换系统 dsh，需重启 dsh 进程生效",
+			note: "提示：升级将更新桌面实际运行的 dsh（内置实例或 workbuddy/全局），需重启 dsh 进程生效",
 		};
 		var en = Object.assign({}, zh, {
 			title: "Version Manager",
@@ -107,7 +107,7 @@ window.__ModuleLoader__.load({
 			document.head.appendChild(el);
 		}
 
-		// ---- 入口按钮（注入到 sidebar.footer.action）----
+		// ---- 入口按钮（注入到 settings.section）----
 		function FabButton(props) {
 			var t = props.t;
 			var icon = React.createElement("span", { className: "vm-fab-icon" },
@@ -177,9 +177,7 @@ window.__ModuleLoader__.load({
 			}
 
 			if (!info) {
-				return React.createElement(Modal, { open: props.open, onClose: props.onClose, title: t("title") },
-					React.createElement("div", { className: "vm-status" }, t("refresh") + "...")
-				);
+				return React.createElement("div", { className: "vm-status" }, t("refresh") + "...");
 			}
 
 			var stable = info.channels && info.channels.stable || {};
@@ -189,14 +187,8 @@ window.__ModuleLoader__.load({
 			var isStableActive = info.installed && info.installed === stable.version;
 			var isExplorerActive = info.installed && info.installed === explorer.version;
 
-			return React.createElement(Modal, {
-				open: props.open,
-				onClose: props.onClose,
-				title: t("title"),
-				closeLabel: t("close"),
-				className: "vm-dialog",
-			},
-				React.createElement("div", { style: { padding: "0 0 8px" } },
+			return React.createElement("div", { style: { padding: "0 0 8px" } },
+					React.createElement("div", { className: "vm-meta", style: { margin: "4px 0 10px", fontSize: 14, color: "var(--dsw-alias-label-primary)", fontWeight: 600 } }, t("title")),
 					React.createElement("p", { className: "vm-meta" }, t("subtitle")),
 					// 已装版本
 					React.createElement("div", { className: "vm-row" },
@@ -264,33 +256,28 @@ window.__ModuleLoader__.load({
 					),
 					status ? React.createElement("div", { className: "vm-status" }, status) : null,
 					React.createElement("div", { className: "vm-note" }, t("note"))
-				)
 			);
 		}
 
-		// ---- 组合容器（state 持有 modal open）----
+		// ---- 组合容器（直接渲染面板内容，无按钮/弹层）----
 		function VersionManagerRoot(props) {
 			var t = props.t;
-			var _useState5 = useState(false);
-			var open = _useState5[0];
-			var setOpen = _useState5[1];
 			insertCss();
-			return React.createElement(React.Fragment, null,
-				React.createElement(FabButton, { t: t, onOpen: function () { setOpen(true); } }),
-				React.createElement(Panel, { t: t, open: open, onClose: function () { setOpen(false); } })
-			);
+			return React.createElement(Panel, { t: t });
 		}
 
-		// ---- apply：注册 i18n 字典 + 通过 ctx.slots.inject 注入 sidebar.footer.action ----
+		// ---- apply：注册 i18n 字典 + 通过 ctx.slots.inject 注入 settings.section ----
 		var inject = ["slots", "locale"];
 		function apply(ctx) {
 			ctx.effect(function () {
 				return ctx.locale.register(NS, { zh: zh, en: en });
 			}, "version-manager: dictionaries");
-			ctx.slots.inject("sidebar.footer.action", function () {
+			ctx.slots.inject("settings.section", function () {
 				return ctx.slots.register({
-					name: "sidebar.footer.action",
+					name: "settings.section",
 					id: "version-manager",
+					order: 42,
+					label: function () { return ctx.locale.bind(NS)("fabLabel"); },
 					locale: NS,
 				}, VersionManagerRoot);
 			});

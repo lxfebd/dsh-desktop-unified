@@ -241,7 +241,6 @@ function ensurePickerFallbackPatch(): boolean {
  */
 const PRESET_PLUGINS = [
   'dshmarket',
-  'dsh-plugin-market',
   'dsh-plugin-version-manager',
   'dsh-shell-control',
   'dsh-desktop-preset-transfer',
@@ -520,6 +519,21 @@ async function pickPort(): Promise<number> {
 }
 
 /**
+ * Resolve the bundled `@pnpm/exe` directory (self-contained SEA binary that
+ * ships the pnpm CLI without a system Node). Shared by `toolingPathPrefix`
+ * (PATH injection) and the child-process env (`DSH_BUNDLED_PNPM_DIR`), so
+ * in-app installers can locate the exact pnpm binary instead of trusting PATH.
+ */
+function bundledPnpmDir(): string {
+  const require = createRequire(import.meta.url)
+  const pkgJson = require.resolve('@pnpm/exe/package.json')
+  const real = pkgJson.includes('app.asar')
+    ? pkgJson.replace('app.asar', 'app.asar.unpacked')
+    : pkgJson
+  return dirname(real)
+}
+
+/**
  * Standalone pnpm plus a `node` shim for in-app plugin installs. dshmarket
  * and `dsh plugin add` spawn `pnpm` by bare name (and package lifecycle
  * scripts spawn `node`), but GUI launches inherit a bare launchd PATH with
@@ -544,12 +558,7 @@ function toolingPathPrefix(): string {
       chmodSync(nodeShim, 0o755)
       parts.push(shimDir)
     }
-    const require = createRequire(import.meta.url)
-    const pkgJson = require.resolve('@pnpm/exe/package.json')
-    const real = pkgJson.includes('app.asar')
-      ? pkgJson.replace('app.asar', 'app.asar.unpacked')
-      : pkgJson
-    const pnpmDir = dirname(real)
+    const pnpmDir = bundledPnpmDir()
     // The published tarball ships the SEA binary without the exec bit, and
     // setup.js's hardlink does not add it — fix it here or spawn gets EACCES.
     try {
@@ -602,6 +611,9 @@ function startDsh(port: number): ChildProcess {
       ELECTRON_RUN_AS_NODE: '1',
       DSH_HOME: dshHome(),
       DSH_DESKTOP_PROFILE: activeProfile(),
+      // 让版本管理器/插件能定位桌面实际运行的捆绑 dsh 与内置 pnpm
+      DSH_DESKTOP_BUNDLED_DSH: dirname(dirname(dshBin())),
+      DSH_BUNDLED_PNPM_DIR: bundledPnpmDir(),
       DSH_TELEMETRY_DISABLED: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],

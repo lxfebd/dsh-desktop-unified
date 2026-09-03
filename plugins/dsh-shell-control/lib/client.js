@@ -72,7 +72,6 @@ window.__ModuleLoader__.load({
 
     function ShellPanel(props) {
       var t = props.t;
-      var open = props.open;
       var [state, setState] = useState(null);
       var [err, setErr] = useState("");
       var [okMsg, setOkMsg] = useState("");
@@ -88,7 +87,7 @@ window.__ModuleLoader__.load({
           if (d.bounds) { setW(String(d.bounds.width)); setH(String(d.bounds.height)); }
         });
       }
-      useEffect(function () { if (open) refresh(); }, [open]);
+      useEffect(function () { refresh(); }, []);
 
       function flash(msg) { setOkMsg(msg); setErr(""); setTimeout(function () { setOkMsg(""); }, 2000); }
       function fail(msg) { setErr(msg); setOkMsg(""); }
@@ -107,8 +106,11 @@ window.__ModuleLoader__.load({
 
       var inputStyle = { flex: "1 1 80px", minWidth: 60, height: 30, padding: "0 8px", boxSizing: "border-box", border: "1px solid " + T.ln2, borderRadius: 6, outline: "none", background: T.b3, color: T.p, fontSize: 13, fontFamily: T.font };
 
-      return React.createElement(Modal, { open: open, onClose: props.onClose, title: t("title"), description: t("subtitle"), closeLabel: t("close") },
-        React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, minWidth: 360, fontFamily: T.font } },
+      return React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 4, minWidth: 360, fontFamily: T.font } },
+          React.createElement("div", { style: { margin: "4px 0 10px" } },
+            React.createElement("div", { style: { fontSize: 15, fontWeight: 600, color: T.p } }, t("title")),
+            React.createElement("div", { style: { fontSize: 12, color: T.s, marginTop: 2 } }, t("subtitle"))
+          ),
           okMsg ? React.createElement("div", { style: { color: T.ok, fontSize: 12, marginBottom: 4 } }, "✓ " + okMsg) : null,
           err ? React.createElement("div", { style: { color: T.err, fontSize: 12, marginBottom: 4 } }, "✕ " + err) : null,
           React.createElement(Row, null, React.createElement(Label, null, t("frameless")),
@@ -144,29 +146,12 @@ window.__ModuleLoader__.load({
             ),
             React.createElement(Button, { size: "sm", variant: "ghost", onClick: refresh }, t("refresh"))
           )
-        )
-      );
+        );
     }
 
     function ShellRoot(props) {
       var t = props.t;
-      var _s = useState(false);
-      var open = _s[0], setOpen = _s[1];
-      return React.createElement(React.Fragment, null,
-        React.createElement("button", {
-          type: "button", title: t("fabLabel"), onClick: function () { setOpen(true); },
-          style: { width: "100%", display: "flex", alignItems: "center", gap: 8, height: 36, padding: "0 12px", boxSizing: "border-box", border: "none", borderRadius: 12, background: "transparent", color: T.s, font: "500 14px/22px " + T.font, cursor: "pointer" }
-        },
-          React.createElement("span", { style: { flex: "none", color: T.s } },
-            React.createElement("svg", { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none" },
-              React.createElement("rect", { x: "2", y: "2.5", width: "12", height: "11", rx: "1.5", stroke: "currentColor", strokeWidth: 1.4 }),
-              React.createElement("rect", { x: "2", y: "2.5", width: "12", height: "3", fill: "currentColor" })
-            )
-          ),
-          React.createElement("span", null, t("fabLabel"))
-        ),
-        React.createElement(ShellPanel, { t: t, open: open, onClose: function () { setOpen(false); } })
-      );
+      return React.createElement(ShellPanel, { t: t });
     }
 
     var inject = ["slots", "locale"];
@@ -174,8 +159,14 @@ window.__ModuleLoader__.load({
       ctx.effect(function () {
         return ctx.locale.register(NS, { zh: zh, en: en });
       }, "shell-control: dictionaries");
-      ctx.slots.inject("sidebar.footer.action", function () {
-        return ctx.slots.register({ name: "sidebar.footer.action", id: "shell-control", locale: NS }, ShellRoot);
+      ctx.slots.inject("settings.section", function () {
+        return ctx.slots.register({
+          name: "settings.section",
+          id: "shell-control",
+          order: 41,
+          label: function () { return ctx.locale.bind(NS)("fabLabel"); },
+          locale: NS
+        }, ShellRoot);
       });
     }
 
