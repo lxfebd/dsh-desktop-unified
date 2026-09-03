@@ -1,0 +1,47 @@
+{
+  "_purpose": "P6 精选目录迁移产物：把老 fork 插件市场（plugins/dsh-plugin-market/tab-plugins.json）的中文精选条目迁移到上游 awesome-dsh-plugin 目录。本文件是本地备好的贡献稿，GitHub 推送/PR 等用户拍板。",
+  "_upstream": {
+    "source": "https://github.com/awesome-dsh-plugin/awesome-dsh-plugin",
+    "catalog": "https://awesome-dsh-plugin.com/plugins.json",
+    "npm-mirror": "dsh-plugin-catalog（本稿对齐版本 2026.903.3092，2997 条，全量含 zh 描述）",
+    "schema": "name/owner/url/category/description{en,zh}/npm/install；page/stars/downloads/added 由站点构建器 build-site.mjs 生成，贡献条目不必提供"
+  },
+  "_audit_2026-09-03": {
+    "结论": "老 fork 精选链 5 条里 3 条上游已收录（含中文描述），fork 的『中文精选』价值大部分已被上游吸收，真正需要贡献的只剩下面 ready 数组。",
+    "已收录": [
+      "DSH-better-sidebar (omdsh-dev) — name=DSH-better-sidebar, npm=dsh-better-sidebar, stars 3267, 含 zh；fork 里的小写 npm 名即它的安装名",
+      "dsh-sentinel (fuhefei) — 含 zh，workflow 分类；fork 钉的 #v0.7.0 tag 本次网络抖动未能确认，提交前建议再 git ls-remote --tags 确认一次",
+      "dsh-context-doctor (Zhenyu98) — 含 zh，dev 分类；tag v0.2.0 已确认存在"
+    ],
+    "验证方式": "git ls-remote 实测（网络间歇失败时重试），npm registry API 实测；未通过验证的一律不进 ready。"
+  },
+  "ready": [
+    {
+      "name": "dsh-git-remotes",
+      "owner": "yq04",
+      "url": "https://github.com/yq04/dsh-git-remotes",
+      "category": "dev",
+      "description": {
+        "en": "Sidebar tab for Git remote management: push, pull and branch management inside the sidebar.",
+        "zh": "侧边栏 Tab：Git 远程管理，推送 / 拉取 / 分支管理。依赖 DSH-better-sidebar（先装它）。"
+      },
+      "npm": null,
+      "install": "dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add github:yq04/dsh-git-remotes"
+    }
+  ],
+  "blocked": [
+    {
+      "name": "dsh-sidebar-qa",
+      "owner": "ChenRuoT",
+      "url": "https://github.com/ChenRuoT/dsh-sidebar-qa",
+      "category": "productivity",
+      "description": {
+        "en": "Sidebar tab: select text and ask the AI a follow-up question in one click.",
+        "zh": "侧边栏 Tab：划选文本后一键追问 AI。依赖 DSH-better-sidebar（先装它）。"
+      },
+      "npm": null,
+      "install": "dsh plugin --profile web add dsh-better-sidebar && dsh plugin --profile web add github:ChenRuoT/dsh-sidebar-qa",
+      "_blocked_reason": "git ls-remote 4 次连接 github.com 失败（同期其他仓库有成功），无法确认仓库是否仍存在。不臆造：仓库活着并经网络确认可达之前，不提交。"
+    }
+  ]
+}

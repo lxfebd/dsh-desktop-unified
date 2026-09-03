@@ -246,6 +246,7 @@ const PRESET_PLUGINS = [
   'dsh-shell-control',
   'dsh-desktop-preset-transfer',
   'dsh-terminal',
+  'dsh-market-tools',
 ]
 
 /**
@@ -351,6 +352,9 @@ function presetBundledPlugins(): void {
       // presets as registry ranges — pnpm then aborts EVERY market install
       // on the unpublished names (ERR_PNPM_FETCH_404). Self-heal every boot.
       repairPresetDepSpecs(manifestPath, plugins)
+      // Presets added by a later app version land on existing profiles too;
+      // the marker map distinguishes "never shipped yet" from "user removed".
+      adoptNewPresets(manifestPath, marker, plugins)
       return
     }
     mkdirSync(profileDir, { recursive: true })
@@ -372,21 +376,7 @@ function presetBundledPlugins(): void {
       const workspacePath = join(profileDir, 'pnpm-workspace.yaml')
       if (!existsSync(workspacePath)) writeFileSync(workspacePath, PROFILE_PNPM_WORKSPACE)
     }
-    const bundles = manifest.dsh?.profile?.bundles ?? []
-    let changed = false
-    for (const plugin of plugins) {
-      if (!bundles.includes(plugin.name)) {
-        bundles.push(plugin.name)
-        changed = true
-      }
-      manifest.dependencies ??= {}
-      if (manifest.dependencies[plugin.name] === undefined) {
-        manifest.dependencies[plugin.name] = presetDepSpec(plugin)
-        changed = true
-      }
-    }
-    if (changed) {
-      manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles } }
+    if (addPresetsToManifest(manifest, plugins)) {
       writeFileSync(manifestPath, JSON.stringify(manifest, undefined, 2) + '\n')
     }
     const fallbackDir = join(dshHome(), 'profiles', 'node_modules')
@@ -421,6 +411,104 @@ function repairPresetDepSpecs(manifestPath: string, plugins: PresetPlugin[]): vo
   if (changed.length === 0) return
   writeFileSync(manifestPath, JSON.stringify(manifest, undefined, 2) + '\n')
   appendFileSync(logFile(), `\n=== preset dep specs migrated to local links: ${changed.join(', ')} ===\n`)
+}
+
+/**
+ * Layer preset plugins onto a profile manifest in place: `dsh.profile.bundles`
+ * entry plus a local-link dependency (never a registry range). Only fills gaps
+ * — existing entries (including a user's deliberate change) are left alone.
+ * @param manifest - profile manifest to mutate
+ * @param plugins - the preset plugins to ensure
+ * @returns true when anything was added (caller persists the manifest)
+ */
+function addPresetsToManifest(manifest: ProfileManifest, plugins: PresetPlugin[]): boolean {
+  const bundles = manifest.dsh?.profile?.bundles ?? []
+  let changed = false
+  for (const plugin of plugins) {
+    if (!bundles.includes(plugin.name)) {
+      bundles.push(plugin.name)
+      changed = true
+    }
+    manifest.dependencies ??= {}
+    if (manifest.dependencies[plugin.name] === undefined) {
+      manifest.dependencies[plugin.name] = presetDepSpec(plugin)
+      changed = true
+    }
+  }
+  if (changed) {
+    manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles } }
+  }
+  return changed
+}
+
+/**
+ * Re-attach a bundle entry whose preset DEPENDENCY is still declared but
+ * whose `dsh.profile.bundles` entry vanished — a state only a failed boot can
+ * create (safe mode drops the bundle, keeping the dependency). A real
+ * uninstall (market route or `dsh plugin remove`) removes the dependency too,
+ * so user intent is never resurrected here.
+ * @param manifest - profile manifest to mutate
+ * @param plugins - the preset plugins as bundled right now
+ * @returns true when anything was re-attached
+ */
+function healDroppedPresetBundles(manifest: ProfileManifest, plugins: PresetPlugin[]): boolean {
+  const bundles = manifest.dsh?.profile?.bundles ?? []
+  let changed = false
+  for (const plugin of plugins) {
+    if (manifest.dependencies?.[plugin.name] !== undefined && !bundles.includes(plugin.name)) {
+      bundles.push(plugin.name)
+      changed = true
+      appendFileSync(logFile(), `\n=== preset bundle re-attached after safe-mode drop: ${plugin.name} ===\n`)
+    }
+  }
+  if (changed) {
+    manifest.dsh = { ...manifest.dsh, profile: { ...manifest.dsh?.profile, bundles } }
+  }
+  return changed
+}
+
+/**
+ * Land presets that were added in a later app version onto an existing
+ * (marker-bearing) profile. The marker maps every preset the profile has ever
+ * been given: a name absent from it is genuinely new, so it is appended to the
+ * manifest and linked into the flat module fallback; a name present in the
+ * marker but missing from the manifest was removed by the user and STAYS
+ * removed. An unreadable marker of an unknown format is never guessed at.
+ * @param manifestPath - the active profile's package.json
+ * @param markerPath - the preset marker file (JSON name → version map)
+ * @param plugins - the preset plugins as bundled right now
+ */
+function adoptNewPresets(manifestPath: string, markerPath: string, plugins: PresetPlugin[]): void {
+  if (!existsSync(manifestPath)) return
+  let raw = ''
+  let known: Record<string, unknown>
+  try {
+    raw = readFileSync(markerPath, 'utf8')
+    const trimmed = raw.trim()
+    known = trimmed ? (JSON.parse(trimmed) as Record<string, unknown>) : {}
+  } catch {
+    return
+  }
+  const fresh = plugins.filter((plugin) => !(plugin.name in known))
+  let manifest: ProfileManifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as ProfileManifest
+  } catch {
+    return
+  }
+  const added = addPresetsToManifest(manifest, fresh)
+  const healed = healDroppedPresetBundles(manifest, plugins)
+  if (added || healed) {
+    writeFileSync(manifestPath, JSON.stringify(manifest, undefined, 2) + '\n')
+    const fallbackDir = join(dshHome(), 'profiles', 'node_modules')
+    mkdirSync(fallbackDir, { recursive: true })
+    for (const plugin of fresh) ensurePluginSymlink(join(fallbackDir, plugin.name), plugin.dir)
+    if (fresh.length > 0) {
+      appendFileSync(logFile(), `\n=== new preset plugins adopted: ${fresh.map((p) => p.name).join(', ')} ===\n`)
+    }
+  }
+  const nextMarker = `${JSON.stringify({ ...known, ...Object.fromEntries(plugins.map((p) => [p.name, p.version])) }, undefined, 2)}\n`
+  if (nextMarker !== raw) writeFileSync(markerPath, nextMarker)
 }
 
 /**

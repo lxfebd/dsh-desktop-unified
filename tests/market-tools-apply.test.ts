@@ -1,0 +1,99 @@
+// dsh-market-tools · 插件入口集成测试：假 ctx 走真实 apply()，
+// 验证 4 个工具确实注册、参数转投正确的 /dsh-market/* 路由与请求体。
+import { afterAll, describe, expect, it, vi } from 'vitest'
+import { apply, name as pluginName, inject } from '../plugins/dsh-market-tools/lib/index.js'
+
+const originalFetch = globalThis.fetch
+afterAll(() => {
+  globalThis.fetch = originalFetch
+})
+
+function makeCtx(fetchImpl: (...args: never[]) => Promise<unknown>) {
+  const registered: Array<Record<string, any>> = []
+  const ctx: Record<string, any> = {
+    webServer: { port: 4321 },
+    connection: { authenticatedUrl: (url: string) => `${url}?token=TK` },
+    tools: {
+      register: (tool: Record<string, any>) => {
+        registered.push(tool)
+        return () => {
+          const i = registered.indexOf(tool)
+          if (i >= 0) registered.splice(i, 1)
+        }
+      },
+    },
+    effect: (fn: () => Promise<() => void>) => {
+      void fn()
+    },
+    __fetch: fetchImpl,
+  }
+  // 插件里直接用 globalThis.fetch；测试注入 mock 后还原
+  ;(globalThis as Record<string, any>).fetch = fetchImpl
+  return { ctx, registered }
+}
+
+function res(status: number, body: unknown, cookies: string[] = []) {
+  return {
+    status,
+    headers: { getSetCookie: () => cookies, get: () => null },
+    text: async () => JSON.stringify(body),
+  }
+}
+
+describe('dsh-market-tools apply()', () => {
+  it('exposes cordis plugin shape', () => {
+    expect(pluginName).toBe('dsh-market-tools')
+    expect(inject).toEqual(['webServer', 'connection', 'tools'])
+  })
+
+  it('registers four market_* tools and routes execute() to the right endpoints', async () => {
+    const requests: Array<{ url: string; init: Record<string, any> }> = []
+    const fetchImpl = vi.fn(async (url: string, init: Record<string, any> = {}) => {
+      if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
+      requests.push({ url: String(url), init })
+      if (url.endsWith('/dsh-market/registry')) {
+        return res(200, { source: 'live', registry: { plugins: [{ name: 'a', url: 'https://github.com/o/a', description: { zh: '啊' } }] } })
+      }
+      if (url.endsWith('/dsh-market/installed')) return res(200, { installed: { a: 'github:o/a' }, present: ['a'], disabled: [], live: {} })
+      return res(200, { ok: true, hot: true })
+    })
+    const { ctx, registered } = makeCtx(fetchImpl as never)
+    apply(ctx as never)
+    await vi.waitFor(() => expect(registered.length).toBe(4))
+    expect(registered.map((t) => t.name).sort()).toEqual(['market_install', 'market_list', 'market_uninstall', 'market_update'])
+
+    const list = await registered.find((t) => t.name === 'market_list')!.execute({ query: '' })
+    expect(list.ok).toBe(true)
+    expect(list.catalog[0]).toMatchObject({ name: 'a', description: '啊', installed: true })
+
+    const install = await registered.find((t) => t.name === 'market_install')!.execute({ url: 'https://github.com/o/a' })
+    expect(install).toMatchObject({ ok: true, hot: true })
+    const installReq = requests.find((r) => r.url.endsWith('/dsh-market/install'))!
+    expect(installReq.init.method).toBe('POST')
+    expect(installReq.init.body).toBe('{"url":"https://github.com/o/a"}')
+    expect(installReq.init.headers.origin).toBe('http://127.0.0.1:4321')
+    expect(installReq.init.headers.cookie).toBe('sid=t')
+
+    await registered.find((t) => t.name === 'market_uninstall')!.execute({ name: 'a' })
+    await registered.find((t) => t.name === 'market_update')!.execute({ name: 'a' })
+    expect(requests.some((r) => r.url.endsWith('/dsh-market/uninstall') && r.init.body === '{"name":"a"}')).toBe(true)
+    expect(requests.some((r) => r.url.endsWith('/dsh-market/update') && r.init.body === '{"name":"a"}')).toBe(true)
+
+    const emptyInstall = await registered.find((t) => t.name === 'market_install')!.execute({ url: '  ' })
+    expect(emptyInstall.ok).toBe(false)
+  })
+
+  it('truncates giant pnpm stdout in mutation results', async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      String(url).includes('?token=TK')
+        ? res(303, {}, ['sid=t'])
+        : res(200, { ok: false, error: 'boom', stdout: 'x'.repeat(5000) }),
+    )
+    const { ctx, registered } = makeCtx(fetchImpl as never)
+    apply(ctx as never)
+    await vi.waitFor(() => expect(registered.length).toBe(4))
+    const out = await registered.find((t) => t.name === 'market_install')!.execute({ url: 'https://github.com/o/a' })
+    expect(out.stdout.length).toBeLessThan(1500)
+    expect(out.stdout).toContain('截断')
+  })
+})

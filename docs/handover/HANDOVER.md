@@ -746,3 +746,34 @@ P6 标题宣称「余额/通知」但原任务清单无余额对应物，补记�
 - 用户在修复期间经市场 UI 实装的 2 个插件（`@tt-a1i/archify-dsh`、`@dsh-external/dsh-client-ui-skin-deep-whale-day-night`）保留完好。
 
 **注意**：市场安装后 profile 内由 pnpm 建立 `.pnpm/`、`.modules.yaml`（pnpm 托管目录）。在**不带应用环境**的裸 shell 里跑 `dsh plugin remove` 可能触发 `ERR_PNPM_VIRTUAL_STORE_DIR_MAX_LENGTH_DIFF`（环境变量差异）——统一走市场 UI 或应用内路径即可。
+
+## 十二、2026-09-03 fork 特性回收：market_* AI 工具 + 精选目录迁移 + dshmarket 1.40.0
+
+**背景**：对比 npm 版 `dshmarket` 与老 fork（`plugins/dsh-plugin-market/`）后确认，fork 只剩两项独有能力值得回收，其余（热挂载/安全默认/备份等）上游已全部覆盖。用户批准"回收 + 刷新"方案后实施。
+
+### 1. 新预置插件 `dsh-market-tools`（fork 的 4 个 AI 工具槽位复活）
+
+- `plugins/dsh-market-tools/`：`market_list / market_install / market_uninstall / market_update` 四个 `defineTool` 工具，**100% 转调** dshmarket 官方 `/dsh-market/*` 路由，零逻辑复制；工具描述中文，明确警告 `link:`/`file:` 预置插件不得卸载/更新。
+- 进程内自调用鉴权（照官方 web-app 的打法，实测打通）：`connection.authenticatedUrl(origin+'/')` → `fetch` 带 `redirect:'manual'` 拿 303 的 `getSetCookie()` → 后续请求带 `Cookie` + `Origin: http://127.0.0.1:<port>`（dshmarket 的 `sameOrigin()` 对每个 POST 强制 Origin）。401 时重签 cookie 重试一次。
+- **踩坑 1（bundle 契约）**：dsh 对 profile bundle 强制要求 package.json 里 `dsh.bundle.patch` 指向真实 `cordis.patch.yml`（校验在 `@deepseek-ai/dsh-app-boot/lib/index.js:862`），缺失 → 启动即 safe mode，并把 bundle 从清单摘掉但**保留依赖**（用户手工卸载会连依赖一起删——这个不对称就是下面 heal 的依据）。
+- **踩坑 2（pnpm 11 file: 语义）**：`file:` 依赖在 node_modules 里是**真实拷贝**（非软链），改插件源码后 `pnpm install` 不刷新，必须 `rm -rf node_modules/<name> && pnpm install` 重新物化。
+
+### 2. 预置链增量下发（老 profile 也能收到新预置）
+
+`src/main.ts`：
+- `addPresetsToManifest()`：补齐缺失的 bundle + 依赖（原首次路径逻辑抽出复用）；
+- `adoptNewPresets()`：marker（name→version 映射）存在时对比出**从未下发过**的新预置并下发——marker 由此区分"没发过"与"用户删过"，用户删过的预置永不复活；
+- `healDroppedPresetBundles()`：依赖还在但 bundle 被 safe mode 摘掉的预置，下次启动重新挂回（日志 `preset bundle re-attached after safe-mode drop`）。
+- 两条路径都在真 E2E 里被生产事件验证过（第一次启动踩坑 1 触发摘除，第二次启动 heal 成功）。
+
+### 3. dshmarket 1.10.1 → 1.40.0
+
+`^1.40.0`；路由面全兼容（老路由全保留，新增 webdav/gist/channel/rollback 等）；registry 实测返回 2997 条。全部门禁复跑绿：`tsc --noEmit` 0 错、vitest 8 文件 45 用例（含新增 `tests/market-tools.test.ts` 10 用例 + `tests/market-tools-apply.test.ts` 3 用例）、插件 node:test 4/4、架构校验 deps=40 probed=38 failed=0、build、ci-smoke 退出码 0。
+
+### 4. 终版真 E2E（dshmarket 1.40.0，非 mock）
+
+带 token 登录 → `GET /dsh-market/registry` 2997 条 → `POST /install dsh-theme-cyberpunk2077` → `ok:true hot:true state:live` → `market-tools present:true activation:live` → `POST /uninstall` → `ok:true`，profile 清单回到 8 依赖（2 个用户自装 + 6 预置，无残留）。
+
+### 5. 精选目录迁移（P6）：上游已吸收 3/5，本地备好贡献稿
+
+审计上游目录镜像 `dsh-plugin-catalog@2026.903.3092`（2997 条，**全部**带 zh 描述）：fork 精选链 5 条里 `DSH-better-sidebar`、`dsh-sentinel`、`dsh-context-doctor` 已收录（含中文），"中文精选"价值大部分已被上游吸收。真正缺口只剩 2 条，连同验证证据和阻塞原因写在 `docs/handover/p6-plugins-contribution.json`：`dsh-git-remotes`（repo 经 `git ls-remote` 确认可达，可直接提 PR）；`dsh-sidebar-qa`（4 次连接失败无法确认仓库存在，**不臆造**，blocked）。GitHub 侧动作（PR/推送）一律等用户拍板。

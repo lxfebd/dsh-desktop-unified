@@ -1,0 +1,11 @@
+# dsh-market-tools bundle patch — inserted after the profile layer.
+#
+# 一行 host：注册 4 个 market_* AI 工具（market_list / market_install /
+# market_uninstall / market_update），转调 dshmarket 的 /dsh-market/* 路由，
+# 让内置 AI 能查目录、装卸、更新插件。webServer 提供本地自调端口，connection
+# 提供 launch-token 铸币（authenticatedUrl），tools 提供工具注册；
+# 三者均由官方 bundle 层提供，故该行等待它们就绪。
+- insert:
+    - id: dsh-market-tools
+      name: dsh-market-tools
+      inject: [webServer, connection, tools]

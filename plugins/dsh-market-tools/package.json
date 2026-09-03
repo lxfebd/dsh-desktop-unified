@@ -1,0 +1,19 @@
+{
+  "name": "dsh-market-tools",
+  "description": "DeepSeek Harness 市场 AI 工具位插件：把 dshmarket 的 /dsh-market/* 官方路由包装成 4 个内置 AI 工具（market_list / market_install / market_uninstall / market_update），让对话里的 AI 能直接查目录、装、卸、更新插件。纯转调，不复制任何安装逻辑（pnpm 坑位恢复、热挂载、同源防护全部沿用 dshmarket 路由本体）。",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./lib/http.js": { "default": "./lib/http.js" },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" }
+  },
+  "license": "MIT"
+}
