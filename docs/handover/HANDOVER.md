@@ -721,3 +721,28 @@ P6 标题宣称「余额/通知」但原任务清单无余额对应物，补记�
 地图存在仓库外层 `..\..\.mellos\map.json`；双击 `..\..\启动地图.bat`（或在该目录跑
 `node C:\Users\31672\mellos-mapping\dist\watch.mjs`）开实时面板。后续任何代理接手时
 **改状态必须走 `mmap_update`**，保持地图与提交历史一致。
+
+---
+
+## 十一、2026-09-03 市场插件安装失败修复
+
+**症状**：市场里安装任何插件都报错（pnpm `ERR_PNPM_FETCH_404`，UI 弹安装失败）。
+
+**根因**（实测复现，非猜测）：
+- `dsh plugin add` 是薄转发：在 profile 目录里跑 `pnpm add <target>`，pnpm 会**全量解析** profile 清单的每个 dependency；
+- `presetBundledPlugins()` 旧版把 5 个预置插件写成 `^x.y.z` registry semver；
+- registry 实测：`dsh-plugin-version-manager` / `dsh-shell-control` / `dsh-desktop-preset-transfer` = 404（根本没发布）；`dsh-terminal` 在 npm 是**别人的同名包**（解析到就装错代码）；`dshmarket` 为真实包；
+- 任何一个名字解析失败都会让整条 `pnpm add` 以 1 退出 → 市场什么都装不上。`dsh-market` fork 退役后该问题完全暴露（fork 时代的安装路径不同）。
+
+**修复**（commit `674bf37`）：
+- 新增 `src/preset-deps.ts`：`presetDepSpec()`（预置插件一律写 `link:<应用内置目录>`，斜杠统一 `/`）+ `migratePresetDepSpecs()`（迁移 registry-range 预置项；link: 目标失效——应用搬家/升级——则重指向；非预置条目即用户自装项绝不触碰）；
+- `main.ts`：新装 profile 直接写 link: spec；**每次启动**跑 `repairPresetDepSpecs()` 自愈旧 profile（marker 已存在也执行），迁移时写日志 `preset dep specs migrated to local links`；
+- `tests/preset-deps.test.ts`：9 用例（含幂等、用户项保留、搬家重指向）。
+
+**验证**（全绿，2026-09-03）：
+- `tsc --noEmit` 0 错误；vitest 6 文件 32 用例；插件 node:test 4/4；架构校验 deps=39 failed=0；ci-smoke authenticated ready；
+- 真实应用 E2E（非 mock）：启动壳 → 带 token 登录 → `POST /dsh-market/install`（github 源插件）→ `ok:true` 热挂载 `live`；`POST /dsh-market/uninstall` → `ok:true`，manifest 与 node_modules 清理干净；
+- 用户真实 profile 已迁移，原清单备份为 `package.json.bak-2026-09-03`（userData/dsh-home/profiles/web/ 下）；
+- 用户在修复期间经市场 UI 实装的 2 个插件（`@tt-a1i/archify-dsh`、`@dsh-external/dsh-client-ui-skin-deep-whale-day-night`）保留完好。
+
+**注意**：市场安装后 profile 内由 pnpm 建立 `.pnpm/`、`.modules.yaml`（pnpm 托管目录）。在**不带应用环境**的裸 shell 里跑 `dsh plugin remove` 可能触发 `ERR_PNPM_VIRTUAL_STORE_DIR_MAX_LENGTH_DIFF`（环境变量差异）——统一走市场 UI 或应用内路径即可。
