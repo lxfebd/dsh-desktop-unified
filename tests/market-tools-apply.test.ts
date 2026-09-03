@@ -96,4 +96,40 @@ describe('dsh-market-tools apply()', () => {
     expect(out.stdout.length).toBeLessThan(1500)
     expect(out.stdout).toContain('截断')
   })
+
+  it('blocks uninstall/update of link:/file: preset plugins locally, no request sent', async () => {
+    const sent = vi.fn()
+    const fetchImpl = vi.fn(async (url: string) => {
+      sent(String(url))
+      if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
+      if (url.endsWith('/dsh-market/installed')) {
+        return res(200, {
+          installed: {
+            'dsh-shell-control': { spec: 'link:J:/.../node_modules/dsh-shell-control' },
+            'dsh-theme-cyberpunk2077': { spec: 'github:o/cyberpunk' },
+          },
+        })
+      }
+      return res(200, { ok: true, hot: true })
+    })
+    const { ctx, registered } = makeCtx(fetchImpl as never)
+    apply(ctx as never)
+    await vi.waitFor(() => expect(registered.length).toBe(4))
+    const uninstall = registered.find((t) => t.name === 'market_uninstall')!
+    const update = registered.find((t) => t.name === 'market_update')!
+
+    const block = await uninstall.execute({ name: 'dsh-shell-control' })
+    expect(block).toMatchObject({ ok: false, blocked: true, name: 'dsh-shell-control' })
+    const blockUpd = await update.execute({ name: 'dsh-shell-control' })
+    expect(blockUpd).toMatchObject({ ok: false, blocked: true })
+
+    const pass = await uninstall.execute({ name: 'dsh-theme-cyberpunk2077' })
+    expect(pass.ok).toBe(true)
+    // blocked preset mutations must NOT hit the mutating route (only /installed)
+    expect(sent.mock.calls.filter(([u]) => String(u).includes('/dsh-market/uninstall'))).toHaveLength(1)
+    expect(sent.mock.calls.filter(([u]) => String(u).includes('/dsh-market/update'))).toHaveLength(0)
+    // that single uninstall call is the user-plugin pass, body carries the right name
+    const uninstallUrl = sent.mock.calls.find(([u]) => String(u).includes('/dsh-market/uninstall'))![0] as string
+    expect(uninstallUrl).toContain('http://127.0.0.1:4321/dsh-market/uninstall')
+  })
 })

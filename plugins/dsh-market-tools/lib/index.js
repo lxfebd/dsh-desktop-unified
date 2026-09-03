@@ -41,6 +41,14 @@ function trimResult(json) {
 
 const MUTATE_TIMEOUT_MS = 300000
 
+// 预置插件靠 link:/file: spec 挂进 profile。卸载/更新它们会破坏预置链
+// （卸载会让 desktop 每启一次 self-heal 重挂，更新则指向不明来源），所以
+// 在本地直接拒绝——不是只靠工具描述提醒，而是让请求根本不发出去。
+const PRESET_GUARD_HINT = '该插件是桌面壳预置插件（spec 以 link:/file: 开头），不允许卸载或更新。'
+function guardPreset(spec) {
+  return typeof spec === 'string' && (spec.startsWith('link:') || spec.startsWith('file:'))
+}
+
 export function apply(ctx) {
   const marketCall = (path, opts) =>
     createMarketClient({
@@ -103,6 +111,9 @@ export function apply(ctx) {
       async execute(args) {
         const name = String(args.name || '').trim()
         if (!name) return { ok: false, error: '缺少 name 参数。' }
+        const installed = await marketCall('/dsh-market/installed')
+        const spec = installed.status === 200 ? installed.json?.installed?.[name]?.spec : undefined
+        if (guardPreset(spec)) return { ok: false, blocked: true, name, spec, reason: PRESET_GUARD_HINT }
         const res = await marketCall('/dsh-market/uninstall', { method: 'POST', body: { name }, timeoutMs: MUTATE_TIMEOUT_MS })
         return trimResult(res.json)
       },
@@ -121,6 +132,9 @@ export function apply(ctx) {
       async execute(args) {
         const name = String(args.name || '').trim()
         if (!name) return { ok: false, error: '缺少 name 参数。' }
+        const installed = await marketCall('/dsh-market/installed')
+        const spec = installed.status === 200 ? installed.json?.installed?.[name]?.spec : undefined
+        if (guardPreset(spec)) return { ok: false, blocked: true, name, spec, reason: PRESET_GUARD_HINT }
         const res = await marketCall('/dsh-market/update', { method: 'POST', body: { name }, timeoutMs: MUTATE_TIMEOUT_MS })
         return trimResult(res.json)
       },
