@@ -41,6 +41,12 @@ jobs:
       - run: pnpm docs:build
 
       - uses: actions/configure-pages@v5
+        with:
+          # First run on a brand-new repo: Pages isn't enabled yet, and
+          # configure-pages would fail on the missing site. enablement: true
+          # creates the site (build_type: workflow) through the API, so the
+          # workflow is self-bootstrapping on first push.
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
