@@ -8,6 +8,9 @@ name: sync-and-release
 #   - a manual run asks for it via the `force` input
 # One workflow by design: a tag pushed with GITHUB_TOKEN would not trigger a
 # second workflow.
+#
+# Manual trigger: Actions → sync-and-release → "Run workflow" → toggle
+# "Rebuild even when upstream is unchanged" (force) → Run workflow.
 
 on:
   schedule:
