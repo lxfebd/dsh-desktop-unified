@@ -35,6 +35,8 @@ window.__ModuleLoader__.load({
 			patchOk: "已生效",
 			patchNeed: "需要重打",
 			upgradeOk: "升级完成，需要重启 dsh 生效",
+			upgradeRestarting: "升级完成，正在自动重启 dsh，请稍候…",
+			upgradeRestartFailed: "升级完成，但自动重启未生效（可能非桌面壳环境），请手动重启",
 			upgradeFail: "升级失败",
 			refresh: "刷新",
 			fabLabel: "版本管理",
@@ -63,6 +65,8 @@ window.__ModuleLoader__.load({
 			patchOk: "applied",
 			patchNeed: "needs re-apply",
 			upgradeOk: "Upgrade done, restart dsh to take effect",
+			upgradeRestarting: "Upgrade done, restarting dsh automatically…",
+			upgradeRestartFailed: "Upgrade done, but auto-restart was not triggered (maybe not the desktop shell) — please restart manually",
 			upgradeFail: "Upgrade failed",
 			refresh: "Refresh",
 			fabLabel: "Version",
@@ -164,8 +168,12 @@ window.__ModuleLoader__.load({
 					setUpgrading(false);
 					setUpgradingChannel(null);
 					if (r.ok) {
-						setStatus("✅ " + t("upgradeOk") + " (" + (r.version || "?") + ")");
-						setTimeout(refresh, 800);
+						if (r.restart && r.restart.requested) {
+							setStatus("✅ " + t("upgradeRestarting") + " (" + (r.version || "?") + ")");
+						} else {
+							setStatus("✅ " + t("upgradeRestartFailed") + " (" + (r.version || "?") + ")");
+							setTimeout(refresh, 800);
+						}
 					} else {
 						setStatus("❌ " + t("upgradeFail") + ": " + (r.error || ""));
 					}

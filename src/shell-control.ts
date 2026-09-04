@@ -153,7 +153,11 @@ interface RouteCtx {
   url: URL
   win: BrowserWindow | undefined
   recreate: RecreateWindow
+  onRestart?: RestartHandler
 }
+
+/** 由 main.ts 注入：优雅重启整个外壳（清理子进程/托盘后 relaunch+exit）。 */
+export type RestartHandler = () => void
 
 type Handler = (ctx: RouteCtx) => Promise<void> | void
 
@@ -277,6 +281,20 @@ const ROUTES: Record<string, (ctx: RouteCtx) => Promise<void>> = {
     const result = await resetShellIcon(win)
     sendJson(res, result.ok ? 200 : 500, result)
   }),
+
+  // 请求外壳优雅重启（版本升级后加载新 bundle）。先回 200 让插件读到结果，
+  // 再延迟调用 main.ts 注入的重启回调（清理子进程/托盘 → app.relaunch+exit）。
+  '/api/shell/restart': safe(async (ctx) => {
+    const { req, res, onRestart } = ctx
+    if (typeof onRestart !== 'function') return sendJson(res, 503, { error: 'restart unavailable' })
+    const body = await readBody(req)
+    // 延迟毫秒：给 UI 一点时间显示“正在重启”，并避免与当前响应写入竞争
+    const delayMs = clampInt(body.delayMs, 0, 5000, 300)
+    sendJson(res, 200, { ok: true, restarting: true, delayMs })
+    setTimeout(() => {
+      try { onRestart() } catch { /* 重启路径自带日志 */ }
+    }, delayMs)
+  }),
 }
 
 /** 探测一个可绑定的回环端口。 */
@@ -300,11 +318,13 @@ async function pickPort(): Promise<number> {
  * 启动 shell-control 服务。
  * @param getWindow 返回当前主窗口（可能为空）
  * @param recreate 在 switch_frameless 时由 main.ts 提供以重建窗口
+ * @param onRestart 在 /api/shell/restart 时由 main.ts 提供以优雅重启外壳（可选；缺省该路由返回 503）
  * 实际端口写入 control-port.json，并通过 currentPort() 暴露。
  */
 export async function startShellControl(
   getWindow: WindowGetter,
   recreate: RecreateWindow,
+  onRestart?: RestartHandler,
 ): Promise<void> {
   const port = await pickPort()
   boundPort = port
@@ -331,7 +351,7 @@ export async function startShellControl(
     }
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const handler = ROUTES[url.pathname]
-    const ctx: RouteCtx = { req, res, url, win: getWindow(), recreate }
+    const ctx: RouteCtx = { req, res, url, win: getWindow(), recreate, onRestart }
     if (!handler) return sendJson(res, 404, { error: 'not found: ' + url.pathname })
     void safe(handler)(ctx).catch(() => { /* safe 已处理 */ })
   })
@@ -347,8 +367,9 @@ export async function startShellControl(
 export async function startShellControlBridge(
   getWindow: WindowGetter,
   recreate: RecreateWindow,
+  onRestart?: RestartHandler,
 ): Promise<number> {
-  await startShellControl(getWindow, recreate)
+  await startShellControl(getWindow, recreate, onRestart)
   return currentPort()
 }
 

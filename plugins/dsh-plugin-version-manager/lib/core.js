@@ -7,7 +7,9 @@
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import http from 'node:http'
 
 const execFileP = promisify(execFile)
 
@@ -103,8 +105,37 @@ function findInstallPrefix(pkgDir) {
   return null
 }
 
-/** 升级 dsh 到指定通道。安装到实际运行目录（桌面内置或 workbuddy/全局），而非固定 npm 全局。 */
-export async function upgradeTo(channel) {
+/**
+ * 请求桌面壳优雅重启：升级写入磁盘后，运行中的进程仍加载旧 bundle，必须重启
+ * 才生效。经 control-port.json（与 dsh-shell-control 同约定：$DSH_HOME/shell/）
+ * 发现 shell-control 服务，POST /api/shell/restart + token。端口文件缺失
+ * （非桌面壳环境）或服务拒绝时静默返回 requested:false，由 UI 提示手动重启。
+ */
+function requestShellRestart(delayMs) {
+  return new Promise((resolve) => {
+    try {
+      const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh-home')
+      const info = JSON.parse(fs.readFileSync(path.join(dshHome, 'shell', 'control-port.json'), 'utf8'))
+      const port = Number(info && info.port)
+      const token = info && info.token
+      if (!port || typeof token !== 'string' || !token) return resolve({ requested: false, reason: 'control-port.json 缺少 port/token' })
+      const body = JSON.stringify({ delayMs })
+      const req = http.request({
+        host: '127.0.0.1', port, path: '/api/shell/restart', method: 'POST', timeout: 4000,
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'x-dsh-shell-token': token },
+      }, (res) => { res.resume(); resolve({ requested: res.statusCode === 200, status: res.statusCode }) })
+      req.on('error', (e) => resolve({ requested: false, reason: e.message }))
+      req.on('timeout', () => { req.destroy(); resolve({ requested: false, reason: 'timeout' }) })
+      req.end(body)
+    } catch (e) {
+      resolve({ requested: false, reason: e.message })
+    }
+  })
+}
+
+/** 升级 dsh 到指定通道。安装到实际运行目录（桌面内置或 workbuddy/全局），而非固定 npm 全局。
+ * 成功后默认请求桌面壳自动重启（autoRestart:false 可关闭）。 */
+export async function upgradeTo(channel, { autoRestart = true } = {}) {
   const tag = channel === 'explorer' ? 'next' : 'latest'
   const root = findDshRoot()
   if (!root) return { ok: false, error: '未找到已安装的 dsh' }
@@ -128,14 +159,16 @@ export async function upgradeTo(channel) {
     child.stdout.on('data', (d) => { out += d.toString() })
     child.stderr.on('data', (d) => { out += d.toString() })
     child.on('error', (e) => resolve({ ok: false, error: 'pnpm/npm 启动失败: ' + e.message }))
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
       if (code === 0) {
         const root2 = findDshRoot()
         let version = ''
         try { version = JSON.parse(fs.readFileSync(path.join(root2, 'package.json'), 'utf8')).version } catch (e) { console.error('[dsh-plugin-version-manager] 升级后读取版本失败', e.message) }
         let applied = []
         try { applied = applyPatches(root2) } catch (e) { applied = [{ ok: false, error: e.message }] }
-        resolve({ ok: true, version, applied })
+        let restart
+        if (autoRestart) restart = await requestShellRestart(1500)
+        resolve({ ok: true, version, applied, restart })
       } else {
         const tail = out.split('\n').filter(Boolean).slice(-8).join('\n')
         resolve({ ok: false, error: `pnpm/npm install 失败 (${code}): ${tail}` })

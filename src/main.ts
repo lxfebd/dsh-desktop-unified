@@ -2040,6 +2040,21 @@ async function restoreLastGoodAndRelaunch(): Promise<void> {
  * plugin before escalating to a full plugin-free boot. Throws only when the
  * user declines recovery or every rung has been exhausted.
  */
+/**
+ * shell-control /api/shell/restart 用：优雅重启整个外壳（版本管理插件升级
+ * 成功后调用，让重启加载新 dsh bundle）。与 brew 更新/profile 切换同款的
+ * 手动清理程序——app.exit 不触发 will-quit，必须自己拆托盘、杀 dsh 子进程
+ * （孤儿 dsh 会继续占着端口，导致重启后 pickPort 漂移或双实例状态错乱）。
+ */
+function relaunchForShellRestart(): void {
+  appendFileSync(logFile(), `\n=== shell restart requested via shell-control: relaunch ===\n`)
+  quitting = true
+  tray?.destroy()
+  if (dshChild && dshChild.exitCode === null) dshChild.kill()
+  app.relaunch()
+  app.exit(0)
+}
+
 async function boot(): Promise<void> {
   ensureProfileSeed(activeProfile())
   presetBundledPlugins()
@@ -2058,7 +2073,7 @@ async function boot(): Promise<void> {
       const prefs = loadPrefs()
       mainWindow = createWindow(port, prefs)
       ensureShellIconFromMain(mainWindow)
-      void startShellControl(() => mainWindow, recreateWindow)
+      void startShellControl(() => mainWindow, recreateWindow, relaunchForShellRestart)
       createTray(port)
       booted = true
       startSessionNotifier()
