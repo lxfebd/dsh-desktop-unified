@@ -115,7 +115,14 @@ export async function upgradeTo(channel) {
   return new Promise((resolve) => {
     // 桌面内置 dsh：优先用内置 pnpm 更新应用内依赖，与桌面实际运行的捆绑实例保持一致
     const { bin, args } = isBundled ? pnpmBin() : npmInvoke([])
-    const fullArgs = [...args, 'install', '--prefix', installDir, `@deepseek-ai/dsh@${tag}`, '--no-audit', '--no-fund', '--progress=false']
+    // 两种包管理器的加依赖语法不同，混用会静默失败或报 Unknown options：
+    //  - npm：`install --prefix <dir> <pkg>` 可加依赖；audit/fund 默认开启，用
+    //    --no-audit --no-fund 关掉（这两个是 npm 专属开关，pnpm 不认识会直接报错）。
+    //  - pnpm：`install <pkg>` 不会加依赖（静默 no-op），必须用 `add --dir <dir> <pkg>`；
+    //    实测 pnpm add --dir 能把指定版本装进目标目录并写入其 package.json。
+    const fullArgs = isBundled
+      ? [...args, 'add', '--dir', installDir, `@deepseek-ai/dsh@${tag}`, '--progress=false']
+      : [...args, 'install', '--prefix', installDir, `@deepseek-ai/dsh@${tag}`, '--no-audit', '--no-fund', '--progress=false']
     const child = spawn(bin, fullArgs, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
     child.stdout.on('data', (d) => { out += d.toString() })
