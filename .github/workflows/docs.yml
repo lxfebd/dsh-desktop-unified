@@ -26,6 +26,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # A stuck runner previously left this job "in progress" for an hour with
+    # no new log output. Bound the job so a hung runner fails instead of
+    # occupying the concurrency group forever.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
