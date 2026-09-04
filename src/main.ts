@@ -753,9 +753,16 @@ function startDsh(port: number): ChildProcess {
     if (lastNl !== -1) stdoutTextBuf = stdoutTextBuf.slice(lastNl + 1)
   })
   child.stderr?.on('data', (chunk: Buffer) => appendFileSync(log, chunk))
-  child.on('exit', (code, signal) =>
-    appendFileSync(log, `\n=== dsh web exited (code ${code}, signal ${signal}) at ${new Date().toISOString()} ===\n`),
-  )
+  // dsh 意外退出（booted 之后、非主动 quit）：dshmarket 的"立即重启"/插件热替换
+  // 会 kill 当前 dsh 或让页面与端口脱节，壳必须整套 relaunch 才能恢复窗口与
+  // cookie 的一致性。boot 阶段的退出走 recovery 阶梯，不进这里。
+  child.on('exit', (code, signal) => {
+    appendFileSync(log, `\n=== dsh web exited (code ${code}, signal ${signal}) at ${new Date().toISOString()} ===\n`)
+    if (booted && !quitting) {
+      appendFileSync(log, `\n=== dsh child exited unexpectedly; relaunching the shell to restore the port + window ===\n`)
+      relaunchForShellRestart()
+    }
+  })
   return child
 }
 
