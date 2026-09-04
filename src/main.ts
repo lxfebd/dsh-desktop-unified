@@ -2140,6 +2140,12 @@ if (!gotLock) {
     // 日志在 ready 前可能不可用，忽略
   }
 
+  // Windows taskbar icon fix: set explicit AppUserModelID so the taskbar
+  // uses the window icon (devIcon) rather than Electron's default exe icon.
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('com.deepseek.dshdesktop')
+  }
+
   app.on('second-instance', (_event, argv) => {
     // A rogue LaunchAgent daemonising this binary, or a synthetic launch
     // carrying a script argument, is not a user focus request — ignore both.

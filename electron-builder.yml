@@ -7,8 +7,15 @@ directories:
 
 files:
   - dist/**
-  - node_modules/**
   - package.json
+  # node_modules intentionally NOT globbed here. electron-builder collects the
+  # production dependency tree automatically from package.json `dependencies`
+  # (registry, scoped, and file: preset plugins included) and never ships
+  # devDependencies. A raw `node_modules/**` glob would bypass that filter and
+  # bloat the installer with build-only tooling (electron ~352M, typescript,
+  # electron-builder, vitepress/vitest/vue, etc.). asarUnpack below still applies
+  # to the auto-collected production node_modules so the spawned dsh subprocess
+  # can execute unpacked entry paths.
 
 # The dsh CLI entry is spawned as a child process; asar archives are not
 # executable paths, so the runtime tree must stay on disk.
