@@ -25,12 +25,14 @@
 - **单实例托盘驻留**：关闭窗口只最小化到系统托盘，后台任务继续运行；托盘图标提供「Show」、「Quit」、打开日志/数据目录等入口。  
 - **完整的本地开发链路**：基于 TypeScript ESM + pnpm 11.22 + Vitest，`just` 命令一键安装/开发/打包。  
 
-## 🗒️ 本次版本更新（v0.1.2-rc.1.202609041312）
+## 🗒️ 本次版本更新（v1.4.x — 独立 1.x 版本线）
 
-- **新增「从 GitHub 拉取更新…」**（托盘 + 应用菜单）：GitHub API 查最新 release → semver 比较（支持 `-rc.x` prerelease）→ 按平台选安装包 → 流式下载（进度通知）→ 打开/定位安装包；网络失败一键跳发布页。
-- **修复**：dshmarket running-agent 守卫自拦截（AI 无法自行装插件）；会话完成通知对启动时的陈旧会话误报；启动预热误删 profile 下真实包目录；快捷方式图标更新脚本从无效 PowerShell（解析错误）重写为按目标程序过滤的正确实现；`preset-deps` 将 `~0.1.2` 波打号 semver 误判为本地路径导致市场安装 404；shell-control 重启定时器未清理（退出窗口内可能二次 relaunch）等 8 处缺陷。
-- **修复自动更新 404**：`publish.owner` 与实际发布仓库不一致，导致 electron-updater 每 4 小时请求不存在的仓库 release；已修正（需随新安装包发布生效）。
-- **质量门禁**：Vitest 9 文件 62 用例 + 插件 node:test 5 用例全绿；`tsc --noEmit` 0 错误。
+- **版本线切换**：桌面版本号自 **v1.4.0** 起与上游 `@deepseek-ai/dsh` 解耦，成为独立递增的补丁线（`1.4.0 → 1.4.1 → …`），上游版本改由 `dsh.upstreamVersion` 跟踪。既满足 electron-updater 对合法递增 semver 的要求，也摆脱了旧「上游版本+UTC 时间戳」方案在桌面号超过上游后无意义打时间戳的问题。
+- **首个 1.x 安装包**：本版本线首个安装包（v1.4.0+）包含以下修复与功能：
+  - **修复自动更新 404**：`publish.owner` 与实际发布仓库不一致，导致 electron-updater 每 4 小时请求不存在的仓库 release；已修正为 `lxfebd/dsh-desktop-unified`。
+  - **「从 GitHub 拉取更新…」**（托盘 + 应用菜单）：GitHub API 查最新 release → semver 比较（支持 `-rc.x` prerelease）→ 按平台选安装包 → 流式下载（进度通知）→ 打开/定位安装包；网络失败一键跳发布页。
+  - **8 处缺陷修复**：dshmarket running-agent 守卫自拦截（AI 无法自行装插件）；会话完成通知对启动时的陈旧会话误报；启动预热误删 profile 下真实包目录；快捷方式图标更新脚本从无效 PowerShell（解析错误）重写为按目标程序过滤的正确实现；`preset-deps` 将 `~0.1.2` 波打号 semver 误判为本地路径导致市场安装 404；shell-control 重启定时器未清理（退出窗口内可能二次 relaunch）等。
+- **质量门禁**：Vitest 10 文件 68 用例 + 插件 node:test 5 用例全绿；`tsc --noEmit` 0 错误。
 
 ## 📦 安装方式
 
@@ -92,10 +94,7 @@ just dist-win   # 构建 Windows 安装包（nsis，需在 Windows / CI 上运�
 3. **peer-only 运行时依赖由脚本自动维护，不要手动删。** dsh 树里有些 `@deepseek-ai/*` 包只在 `peerDependencies` 中出现，而 electron-builder 的生产收集器**只读 `dependencies`/`optionalDependencies`**，会漏掉纯 peer 包。`sync-upstream.mjs` 的 `detectPeerOnlyRuntimeDeps()` 会在升版时把它们 pin 到 `dependencies`。设计上**只增不删**——即便某包后来变成真依赖，留着无害，删了反而可能因改名产生悬空引用。  
 4. **`minimumReleaseAgeExclude` 必须保持 `'@deepseek-ai/*'` 通配，**不要改成逐包 pin 版本**。pnpm 默认 24 小时最小发布龄检查，而本仓库就是要小时内跟进上游，所以整个第一方 scope 豁免。rc.6 时代这里曾是 ~190 行 `name@version` 列表，sync 升 rc.7 后列表过期、CI 的 `pnpm install --frozen-lockfile` 全部失败（`ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`）。sync 已推 tag 但 build 失败会留下无 release 的孤儿 tag——现在 CI 会检测「最新 tag 无对应 release」并自动 force 重建，不再需要手动 `gh run rerun --failed` 补救，但孤儿 tag 本身会留在 tag 列表里。  
 5. **整个 `node_modules` 必须 `asarUnpack`。** `dsh web` 是子进程执行的入口路径，asar 归档内的路径无法被 spawn 执行，因此 `electron-builder.yml` 里 `asarUnpack: node_modules/**`。`dshBin()` 还会把 `app.asar` 路径重写为 `app.asar.unpacked`。  
-6. **版本号不要手动改。** 桌面版本由 `nextVersion()` 计算：  
-   - 上游预发布版（如 `0.1.0-rc.6`）→ 追加 UTC 构建时间戳：`0.1.0-rc.6.202508151030`。定宽 `YYYYMMDDHHMM`（12 位），保证 tag 的字母序 == 时间序——纯自增计数会在 9→10 进位处让 `rc.6.9` 字母序排在 `rc.6.11` 前面  
-   - 上游稳定版（如 `0.1.0`）→ 独立 patch 线 `X.Y.(Z+1)`  
-   - 保证严格递增且合法 semver（electron-updater 要求）  
+6. **版本号不要手动改。** 桌面版本是独立递增的 1.x 线（自 v1.4.0 起，由 `sync-upstream.mjs` 的 `nextVersion()` 计算，1.4.0 → 1.4.1 → …）；上游 `@deepseek-ai/dsh` 版本记录在 `dsh.upstreamVersion`，不再编码进桌面版本号。旧方案（上游预发布版 + UTC 时间戳，如 `0.1.2-rc.1.202609041312`）为历史遗留，若版本号误回退到该形态，`nextVersion()` 会先归并到稳定核心（`0.1.2` → `0.1.3`）再接回 1.x 线。合法且严格递增的 semver 由 `semver.inc` 保证（electron-updater 要求）。
 7. **macOS 构建未签名 / 未公证。** CI 里 `CSC_IDENTITY_AUTO_DISCOVERY=false`。用户首次打开需右键 → 打开；若提示「已损坏」需 `xattr -cr "/Applications/DSH Desktop.app"`。Homebrew 渠道由独立仓库提供（cask `dsh-desktop`，仅 arm64），其产物文件名（`DSH-Desktop-<version>-mac-arm64.dmg`）变动时必须同步改 cask 的 `url`。产物文件名必须不含空格：`${productName}` 里的空格会让 electron-builder 往 latest.yml 写连字符化的 safeArtifactName，而 `gh release` 上传又把空格转成点号，二者不一致时更新下载必 404。  
 8. **ESM 项目，导入用 NodeNext 风格。** 例如 `.mjs` 脚本里用 `import.meta.url` + `createRequire`。`@deepseek-ai/dsh` 无 `exports` map，`dshBin()` 直接 `require.resolve('@deepseek-ai/dsh/lib/bin.js')`。  
 9. **`@pnpm/exe`（插件市场的内置 pnpm）有三个坑，改动前必读。** ① 其 npm tarball 的 SEA 二进制**不带执行位**，setup.js 的 hardlink 也不补，`toolingPathPrefix()` 里的运行时 `chmodSync` 是必需的，别删；② SEA 二进制要求同目录有 `dist/pnpm.mjs`，所以 PATH 必须指 `@pnpm/exe` 包目录，不能直接指 `@pnpm/macos-arm64` 等平台包；③ 它的 `bin` 会在 `node_modules/.bin/pnpm` 遮蔽 corepack，electron-builder 的依赖收集器 spawn pnpm 时命中的就是它——**`packageManager` 字段必须与 `@pnpm/exe` 版本保持一致**（当前 11.22.0），否则收集器报版本不一致直接挂。另外它让 dmg 从 ~153MB 涨到 ~237MB，升版时留意体积。  
@@ -130,7 +129,7 @@ tests/                      # Vitest 单元测试（dependency-safety、market-t
 
 ## 🧪 质量门禁
 
-- **单元测试**：Vitest 9 文件 62 用例（含 `market-tools.*`、`github-releases`、`session-notifier` 等），全部通过  
+- **单元测试**：Vitest 10 文件 68 用例（含 `sync-upstream`、`market-tools.*`、`github-releases`、`session-notifier` 等），全部通过  
 - **插件自身测试**：node:test 5/5  
 - **类型检查**：`tsc --noEmit` 0 错误  
 - **架构校验**：deps=40 probed=38 failed=0  
