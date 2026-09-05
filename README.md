@@ -10,23 +10,33 @@
 
 ## ✨ 本版本与众不同的特性
 
+- **从 GitHub 直接拉取更新**：托盘/菜单新增「从 GitHub 拉取更新…」—— 查询实际发布仓库的最新 release（不依赖 electron-updater 的签名与 latest.yml），发现新版本列出变更说明，下载对应平台安装包（Windows `setup.exe` / macOS `.dmg`）并打开；`electron-builder.yml` 的 `publish.owner` 已修正为实际发布仓库 `lxfebd/dsh-desktop-unified`，修复了此前每 4 小时自动更新请求打到旧仓库而 404 的问题。
 - **6 款内置预置插件**（开箱即用，无需额外安装）：
   - `dshmarket` — 官方插件市场
   - `dsh-plugin-version-manager` — 插件版本管理
   - `dsh-shell-control` — 终端 & 命令面板
   - `dsh-desktop-preset-transfer` — 预置插件传输（实现跨机器一致预置）
   - `dsh-terminal` — 系统终端（Shell）
-  - `dsh-market-tools` — **自研 AI 工具插件**（市场列表/安装/卸载/更新 4 个 `market_*` 工具，100% 转调官方 `/dsh-market/*` 路由）  
+  - `dsh-market-tools` — **自研 AI 工具插件**（市场列表/安装/卸载/更新 4 个 `market_*` 工具，100% 转调官方 `/dsh-market/*` 路由）
+- **AI 可自行安装/更新/卸载插件**：修复了 dshmarket running-agent 守卫会拦截发起者自身的问题（发起安装的 agent 在请求瞬间必处于 running），现在 agent 发起的插件变更不再被自身的 running 状态 409 挡回，同时仍阻止其他正在运行的 agent 的变更。
 - **插件保护机制**：内置插件 (`link:/file:` 类型) 被硬阻止卸载/更新，防止意外破坏预置链。  
 - **多 profile 支持**：在同一套实例里可管理多套独立配置（如 `web`、`web-desktop` 等），互不干扰。  
 - **安全模式与自愈**：插件崩溃时进入安全模式摘除故障插件；重启后自动尝试恢复被摘除的预置插件（依赖仍在时挂回），日志可见 `preset bundle re-attached after safe-mode drop`。  
 - **单实例托盘驻留**：关闭窗口只最小化到系统托盘，后台任务继续运行；托盘图标提供「Show」、「Quit」、打开日志/数据目录等入口。  
 - **完整的本地开发链路**：基于 TypeScript ESM + pnpm 11.22 + Vitest，`just` 命令一键安装/开发/打包。  
 
+## 🗒️ 本次版本更新（v0.1.2-rc.1.202609041312）
+
+- **新增「从 GitHub 拉取更新…」**（托盘 + 应用菜单）：GitHub API 查最新 release → semver 比较（支持 `-rc.x` prerelease）→ 按平台选安装包 → 流式下载（进度通知）→ 打开/定位安装包；网络失败一键跳发布页。
+- **修复**：dshmarket running-agent 守卫自拦截（AI 无法自行装插件）；会话完成通知对启动时的陈旧会话误报；启动预热误删 profile 下真实包目录；快捷方式图标更新脚本从无效 PowerShell（解析错误）重写为按目标程序过滤的正确实现；`preset-deps` 将 `~0.1.2` 波打号 semver 误判为本地路径导致市场安装 404；shell-control 重启定时器未清理（退出窗口内可能二次 relaunch）等 8 处缺陷。
+- **修复自动更新 404**：`publish.owner` 与实际发布仓库不一致，导致 electron-updater 每 4 小时请求不存在的仓库 release；已修正（需随新安装包发布生效）。
+- **质量门禁**：Vitest 9 文件 62 用例 + 插件 node:test 5 用例全绿；`tsc --noEmit` 0 错误。
+
 ## 📦 安装方式
 
-此仓库目前 **未对外发布**（无 `repository` 字段、无 `Releases`）。如需本地运行，请参考「本地开发」小节。  
-若你拥有此仓库的源码（例如经由维护者直接共享），可直接执行下面的本地开发步骤。
+最新安装包从 **GitHub Releases** 下载：<https://github.com/lxfebd/dsh-desktop-unified/releases>（Windows `*-setup.exe` / macOS `*.dmg`）。  
+应用内自动更新：Windows 每 4 小时后台检查 + 托盘「检查更新…」手动触发；macOS 未签名构建请用托盘「从 GitHub 拉取更新…」或直接前往 Releases 页下载。  
+拥有源码（例如经维护者直接共享）时，也可直接执行下面的本地开发步骤。
 
 ## 🖥️ 使用方法
 
@@ -59,7 +69,7 @@
 | 包管理 | **pnpm 11.22.0**（hoisted 模式） | 见下方关键约束，**禁止使用 npm**；版本须与 `@pnpm/exe` 对齐 |
 | 任务运行 | **just**（`justfile`） | 所有命令优先走 just |
 | 打包 | electron-builder 26 | 生成 macOS（dmg+zip）和 Windows（nsis）安装包 |
-| 自动更新 | electron-updater（当打包后运行） | 每 4 小时检查 + 菜单/托盘「检查更新…」手动触发；Windows 后台下载后弹「重启更新」，macOS 未签名走 Homebrew（若通过 brew 安装）或手动下载 Releases（如有） |
+| 自动更新 | electron-updater + GitHub Releases 拉取 | 打包后每 4 小时后台检查 + 菜单/托盘「检查更新…」手动触发；Windows 后台下载后弹「重启更新」，macOS 未签名走 Homebrew（若 brew 安装）或托盘「从 GitHub 拉取更新…」 |
 | 上游同步 | `scripts/sync-upstream.mjs` + GitHub Actions | 每天北京时间 09/13/17 点轮询 npm（读全部 dist-tags 取最大 semver，上游 rc 先发 `next` 后挪 `latest`）；上游或本仓库任一有更新都会出包 |
 
 ### 常用 just 命令
@@ -97,6 +107,8 @@ src/main.ts                 # Electron 主进程（唯一运行时源码，约 2
 src/profiles.js             # Profile 管理（activeProfile、ensureProfileSeed、PROFILES 等）
 src/safe-mode.ts            # 安全模式（插件崩溃摘除 & 自愈逻辑）
 src/preset-deps.ts          # 预置插件依赖处理（presetDepSpec / migratePresetDepSpecs / repairPresetDepSpecs / adoptNewPresets / healDroppedPresetBundles）
+src/github-releases.ts      # GitHub Releases 拉取更新（查 latest / semver 比较 / 选包 / 下载）
+vendor/dshmarket/           # vendored dshmarket（running-agent 守卫自排除补丁，file: 引用）
 scripts/sync-upstream.mjs   # 上游版本检测 + 桌面版本计算 + peer-only 依赖 pin
 build/icon.{icns,ico,png}   # 应用图标
 electron-builder.yml        # 打包配置（appId、target、asarUnpack、publish）
@@ -105,7 +117,7 @@ pnpm-workspace.yaml         # pnpm 配置（hoisted + allowBuilds 白名单）
 dist/                       # tsc 输出（gitignore）
 dist-installer/             # electron-builder 输出（gitignore）
 plugins/                    # 自研/内置插件源码（如 dsh-market-tools、dsh-desktop-preset-transfer 等；dsh-plugin-market 为已退役的旧自研市场 fork，仅作归档参考，不进预置链）
-tests/                      # Vitest 单元测试（dependency-safety、market-tools、preset-deps 等）
+tests/                      # Vitest 单元测试（dependency-safety、market-tools、preset-deps、github-releases 等）
 ```
 
 ## 🛡️ 插件市场与预置插件保护
@@ -118,9 +130,9 @@ tests/                      # Vitest 单元测试（dependency-safety、market-t
 
 ## 🧪 质量门禁
 
-- **单元测试**：Vitest 8 文件 46 用例（含 `market-tools.*` 14 新增），全部通过  
+- **单元测试**：Vitest 9 文件 62 用例（含 `market-tools.*`、`github-releases`、`session-notifier` 等），全部通过  
+- **插件自身测试**：node:test 5/5  
 - **类型检查**：`tsc --noEmit` 0 错误  
-- **插件自身测试**：node:test 4/4  
 - **架构校验**：deps=40 probed=38 failed=0  
 - **构建**：`pnpm build` 成功  
 - **烟雾测试**：ci-smoke authenticated ready  

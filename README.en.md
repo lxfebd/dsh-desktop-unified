@@ -12,6 +12,7 @@ It wraps the official DeepSeek Harness (`@deepseek-ai/dsh`) into a desktop app y
 
 ## ✨ What makes this version different
 
+- **Pull updates straight from GitHub**: new "Pull updates from GitHub…" tray/menu entry — queries the actual publishing repo's latest release (no reliance on electron-updater's signature or latest.yml), lists the changelog when a newer version exists, downloads the platform installer (Windows `setup.exe` / macOS `.dmg`), and opens it; `electron-builder.yml`'s `publish.owner` was corrected to the real repo `lxfebd/dsh-desktop-unified`, fixing the 4-hourly auto-update 404 against a stale repo.
 - **6 built-in preset plugins** (ready to use out of the box):
   - `dshmarket` — the official plugin marketplace
   - `dsh-plugin-version-manager` — plugin version management
@@ -19,15 +20,25 @@ It wraps the official DeepSeek Harness (`@deepseek-ai/dsh`) into a desktop app y
   - `dsh-desktop-preset-transfer` — preset plugin transfer (consistent presets across machines)
   - `dsh-terminal` — system terminal (Shell)
   - `dsh-market-tools` — **self-developed AI tool plugin** (market list/install/uninstall/update via 4 `market_*` tools, all forwarding to the official `/dsh-market/*` routes)
+- **AI can install/update/uninstall plugins itself**: fixed dshmarket's running-agent guard that blocked the originating agent (the caller is necessarily `running` mid-turn) — agent-initiated plugin mutations no longer 409 self-block, while other running agents are still blocked.
 - **Preset protection**: built-in plugins (`link:`/`file:` specs) are hard-blocked from uninstall/update to keep the preset chain intact.
 - **Multi-profile support**: manage multiple independent configurations (e.g. `web`, `web-desktop`) within one instance.
 - **Safe mode with self-healing**: when a plugin crashes, the app enters safe mode and removes the culprit; on restart it automatically tries to re-attach dropped preset plugins (when their deps are still present), logging `preset bundle re-attached after safe-mode drop`.
 - **Single-instance tray residency**: closing the window only minimizes to the system tray while background tasks keep running; the tray icon offers Show, Quit, Open log / Open data directory.
 - **Full local development pipeline**: TypeScript ESM + pnpm 11.22 + Vitest, with `just` commands for install / dev / package.
 
+## 🗒️ This release (v0.1.2-rc.1.202609041312)
+
+- **New "Pull updates from GitHub…"** (tray + app menu): GitHub API latest-release lookup → semver compare (handles `-rc.x` prereleases) → platform installer pick → streaming download (progress notification) → open/reveal installer; network failures offer the releases page.
+- **Fixes**: dshmarket's running-agent guard self-blocking AI-driven plugin installs; session-completion notifications firing for stale pre-start sessions; boot preheat deleting real package dirs under the profile; the shortcut-icon updater being rewritten from an invalid PowerShell script (parse error) to a correct target-filtered implementation; `preset-deps` misclassifying `~0.1.2` tilde semver ranges as local paths (breaking every market install); the shell-control restart timer not being cleared (possible second relaunch after quit) — 8 defects in total.
+- **Auto-update 404 fixed**: `publish.owner` mismatched the actual publishing repo, so electron-updater polled a nonexistent repo every 4 hours; corrected (takes effect with the next packaged release).
+- **Quality gates**: Vitest 9 files 62 cases + plugin node:test 5 cases all green; `tsc --noEmit` 0 errors.
+
 ## 📦 Installation
 
-This repository is **not yet published** (no `repository` field, no `Releases`). To run locally, follow the "Local development" section. If you have the source (e.g. shared directly by the maintainer), the local development steps below are all you need.
+Latest installers from **GitHub Releases**: <https://github.com/lxfebd/dsh-desktop-unified/releases> (Windows `*-setup.exe` / macOS `*.dmg`).  
+In-app auto-update: Windows checks in the background every 4 hours + manual tray "Check for Updates…"; macOS unsigned builds use the tray "Pull updates from GitHub…" or the Releases page directly.  
+If you have the source (e.g. shared directly by the maintainer), the local development steps below are all you need.
 
 ## 🖥️ Usage
 
@@ -60,7 +71,7 @@ This repository is **not yet published** (no `repository` field, no `Releases`).
 | Package manager | **pnpm 11.22.0** (hoisted mode) | See key constraints; **never use npm**; version must align with `@pnpm/exe` |
 | Task runner | **just** (`justfile`) | Prefer just for all commands |
 | Packaging | electron-builder 26 | macOS (dmg+zip) and Windows (nsis) installers |
-| Auto-update | electron-updater (when packaged) | Checks every 4h + manual menu/tray "Check for Updates…"; Windows downloads in background then prompts "Restart and update", macOS (unsigned) uses Homebrew (if brew-installed) or a manual Releases download (when available) |
+| Auto-update | electron-updater + GitHub Releases pull | When packaged: background check every 4h + manual menu/tray "Check for Updates…"; Windows downloads in background then prompts "Restart and update", macOS (unsigned) uses Homebrew (if brew-installed) or the tray "Pull updates from GitHub…" |
 | Upstream sync | `scripts/sync-upstream.mjs` + GitHub Actions | Polls npm at 09/13/17 Beijing time daily (reads all dist-tags for the max semver; upstream rc publishes `next` first, then moves `latest`); a build ships when either upstream or this repo moves |
 
 ### Common just commands
@@ -98,6 +109,8 @@ src/main.ts                 # Electron main process (the only runtime source, ~2
 src/profiles.js             # Profile management (activeProfile, ensureProfileSeed, PROFILES, etc.)
 src/safe-mode.ts            # Safe mode (plugin-crash removal & self-healing)
 src/preset-deps.ts          # Preset plugin dep handling (presetDepSpec / migratePresetDepSpecs / repairPresetDepSpecs / adoptNewPresets / healDroppedPresetBundles)
+src/github-releases.ts      # GitHub Releases update pull (latest lookup / semver compare / pick / download)
+vendor/dshmarket/           # vendored dshmarket (running-agent guard self-exclusion patch, file: dep)
 scripts/sync-upstream.mjs   # Upstream version detection + desktop version calc + peer-only dep pin
 build/icon.{icns,ico,png}   # App icon
 electron-builder.yml        # Packaging config (appId, target, asarUnpack, publish)
@@ -106,7 +119,7 @@ pnpm-workspace.yaml         # pnpm config (hoisted + allowBuilds whitelist)
 dist/                       # tsc output (gitignored)
 dist-installer/             # electron-builder output (gitignored)
 plugins/                    # Self-developed / built-in plugin source (e.g. dsh-market-tools, dsh-desktop-preset-transfer; dsh-plugin-market is a retired old self-made market fork, archived for reference only, not in the preset chain)
-tests/                      # Vitest unit tests (dependency-safety, market-tools, preset-deps, etc.)
+tests/                      # Vitest unit tests (dependency-safety, market-tools, preset-deps, github-releases, etc.)
 ```
 
 ## 🛡️ Plugin marketplace & preset protection
@@ -119,9 +132,9 @@ tests/                      # Vitest unit tests (dependency-safety, market-tools
 
 ## 🧪 Quality gates
 
-- **Unit tests**: Vitest 8 files 46 cases (incl. 14 new `market-tools.*`), all passing
+- **Unit tests**: Vitest 9 files 62 cases (incl. `market-tools.*`, `github-releases`, `session-notifier`), all passing
+- **Plugin self-tests**: node:test 5/5
 - **Type check**: `tsc --noEmit` 0 errors
-- **Plugin self-tests**: node:test 4/4
 - **Architecture check**: deps=40 probed=38 failed=0
 - **Build**: `pnpm build` succeeds
 - **Smoke test**: ci-smoke authenticated ready
