@@ -22,3 +22,6 @@ docs/.vitepress/cache/
 docs/handover/HANDOVER.md
 docs/handover/progress-board.html
 docs/handover/superpowers/
+
+# Local agent scratch scripts (polling/release verification)
+tmp/

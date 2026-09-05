@@ -65,7 +65,7 @@
     "dsh-plugin-version-manager": "file:plugins/dsh-plugin-version-manager",
     "dsh-shell-control": "file:plugins/dsh-shell-control",
     "dsh-terminal": "file:plugins/dsh-terminal",
-    "dshmarket": "^1.40.0",
+    "dshmarket": "file:vendor/dshmarket",
     "electron-updater": "^6.6.2",
     "fflate": "^0.8.3",
     "semver": "^7.7.1"

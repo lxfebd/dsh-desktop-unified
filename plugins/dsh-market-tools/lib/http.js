@@ -16,11 +16,15 @@ export function extractCookies(headers) {
 
 /**
  * 创建指向本机 dsh-market 路由的客户端。
- * @param deps - { port, authenticatedUrl, fetchImpl?, timeoutMs? }
+ * @param deps - { port, authenticatedUrl, agentId?, fetchImpl?, timeoutMs? }
+ *   agentId 是发起请求的 agent 会话 id（如 session-xxx）。它在每次 mutating
+ *   POST 时随 body 发送，dshmarket 的 running-agent guard 用它排除发起者自己，
+ *   只挡其他 running agent——否则任何 agent 发起的安装都会被自己的 running
+ *   状态挡回（安装那一刻发起者必然 mid-turn）。
  * @returns { call(path, opts) } — opts: { method?, body?, timeoutMs? }
  */
 export function createMarketClient(deps) {
-  const { port, authenticatedUrl, fetchImpl = globalThis.fetch, timeoutMs = 30000 } = deps
+  const { port, authenticatedUrl, agentId, fetchImpl = globalThis.fetch, timeoutMs = 30000 } = deps
   const origin = `http://127.0.0.1:${port}`
   let cookie = ''
 
@@ -52,11 +56,18 @@ export function createMarketClient(deps) {
   async function call(path, opts = {}) {
     const method = opts.method ?? 'GET'
     const signal = AbortSignal.timeout(opts.timeoutMs ?? timeoutMs)
+    let body = opts.body
+    // Mutating POSTs carry the caller's agent id so the market's running-agent
+    // guard can exclude the originator (itself mid-turn by definition) while
+    // still blocking OTHER running agents.
+    if (method === 'POST' && agentId && typeof agentId === 'string' && agentId !== '') {
+      body = { ...(body && typeof body === 'object' ? body : {}), agentId }
+    }
     if (!cookie) await mintCookie()
-    let res = await once(path, method, opts.body, signal)
+    let res = await once(path, method, body, signal)
     if (res.status === 401) {
       await mintCookie()
-      res = await once(path, method, opts.body, signal)
+      res = await once(path, method, body, signal)
     }
     const text = await res.text()
     try {

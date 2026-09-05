@@ -8,7 +8,7 @@ afterAll(() => {
   globalThis.fetch = originalFetch
 })
 
-function makeCtx(fetchImpl: (...args: never[]) => Promise<unknown>) {
+function makeCtx(fetchImpl: (...args: never[]) => Promise<unknown>, agentId?: string) {
   const registered: Array<Record<string, any>> = []
   const ctx: Record<string, any> = {
     webServer: { port: 4321 },
@@ -26,6 +26,9 @@ function makeCtx(fetchImpl: (...args: never[]) => Promise<unknown>) {
       void fn()
     },
     __fetch: fetchImpl,
+  }
+  if (agentId) {
+    ;(ctx as Record<string, any>).agent = { id: agentId, session: { id: agentId } }
   }
   // 插件里直接用 globalThis.fetch；测试注入 mock 后还原
   ;(globalThis as Record<string, any>).fetch = fetchImpl
@@ -97,8 +100,7 @@ describe('dsh-market-tools apply()', () => {
     expect(out.stdout).toContain('截断')
   })
 
-  it('blocks uninstall/update of link:/file: preset plugins locally, no request sent', async () => {
-    const sent = vi.fn()
+  it('blocks uninstall/update of link:/file: preset plugins locally, no request sent', async () => {    const sent = vi.fn()
     const fetchImpl = vi.fn(async (url: string) => {
       sent(String(url))
       if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
@@ -131,5 +133,39 @@ describe('dsh-market-tools apply()', () => {
     // that single uninstall call is the user-plugin pass, body carries the right name
     const uninstallUrl = sent.mock.calls.find(([u]) => String(u).includes('/dsh-market/uninstall'))![0] as string
     expect(uninstallUrl).toContain('http://127.0.0.1:4321/dsh-market/uninstall')
+  })
+
+  it('sends the running agent id on mutating calls when ctx.agent is present', async () => {
+    const bodies: string[] = []
+    const fetchImpl = vi.fn(async (url: string, init: Record<string, any> = {}) => {
+      if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
+      bodies.push(String(init.body))
+      if (url.endsWith('/dsh-market/installed')) {
+        return res(200, { installed: { a: 'github:o/a' }, present: ['a'], disabled: [], live: {} })
+      }
+      return res(200, { ok: true, hot: true })
+    })
+    const { ctx, registered } = makeCtx(fetchImpl as never, 'session-agent-1')
+    apply(ctx as never)
+    await vi.waitFor(() => expect(registered.length).toBe(4))
+    await registered.find((t) => t.name === 'market_install')!.execute({ url: 'https://github.com/o/a' })
+    await registered.find((t) => t.name === 'market_uninstall')!.execute({ name: 'a' })
+    expect(bodies.find((b) => b.includes('/dsh-market/install') || b.includes('url'))).toBe('{"url":"https://github.com/o/a","agentId":"session-agent-1"}')
+    expect(bodies).toContain('{"name":"a","agentId":"session-agent-1"}')
+  })
+
+  it('omits agentId when ctx has no running agent', async () => {
+    const bodies: string[] = []
+    const fetchImpl = vi.fn(async (url: string, init: Record<string, any> = {}) => {
+      if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
+      bodies.push(String(init.body))
+      return res(200, { ok: true, hot: true })
+    })
+    const { ctx, registered } = makeCtx(fetchImpl as never)
+    apply(ctx as never)
+    await vi.waitFor(() => expect(registered.length).toBe(4))
+    await registered.find((t) => t.name === 'market_install')!.execute({ url: 'https://github.com/o/a' })
+    expect(bodies).toContain('{"url":"https://github.com/o/a"}')
+    expect(bodies[0]).not.toContain('agentId')
   })
 })

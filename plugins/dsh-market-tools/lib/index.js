@@ -50,9 +50,26 @@ function guardPreset(spec) {
 }
 
 export function apply(ctx) {
+  // 当前运行 agent 的会话 id（session-xxx）。market 的 running-agent guard
+  // 用它在 mutating 请求里排除发起者自己——否则 agent 发起安装的瞬间必然
+  // 被自己的 running 状态挡回（发起时自己就是 mid-turn）。取不到（无 agent
+  // 上下文，如纯脚本/手动触发）则不携带，guard 行为与之前完全一致。
+  const currentAgentId = () => {
+    const direct = ctx?.agent?.id
+    if (typeof direct === 'string' && direct !== '') return direct
+    try {
+      const initiator = ctx?.get?.('agents')?.currentInitiator?.()
+      if (initiator && typeof initiator.id === 'string' && initiator.id !== '') return initiator.id
+    } catch {
+      // 无 initiator 边界：不携带 agentId。
+    }
+    return undefined
+  }
+
   const marketCall = (path, opts) =>
     createMarketClient({
       port: ctx.webServer.port,
+      agentId: currentAgentId(),
       authenticatedUrl: (url) => ctx.connection.authenticatedUrl(url),
     }).call(path, opts)
 

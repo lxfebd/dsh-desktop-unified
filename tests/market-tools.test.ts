@@ -77,6 +77,33 @@ describe('createMarketClient', () => {
     expect(seen?.body).toBe('{"url":"https://github.com/a/b"}')
   })
 
+  it('merges agentId into mutating POST bodies when provided', async () => {
+    const seen: string[] = []
+    const fetchImpl = vi.fn(async (url: string, init: Record<string, never>) => {
+      if (!url.includes('?token=')) seen.push(String(init.body))
+      return url.includes('?token=') ? res(303, '', ['sid=1']) : res(200, { ok: true })
+    })
+    const client = createMarketClient({ ...deps, agentId: 'session-test-abc', fetchImpl: fetchImpl as never })
+    await client.call('/dsh-market/install', { method: 'POST', body: { url: 'https://github.com/a/b' } })
+    await client.call('/dsh-market/uninstall', { method: 'POST', body: { name: 'x' } })
+    expect(seen[0]).toBe('{"url":"https://github.com/a/b","agentId":"session-test-abc"}')
+    expect(seen[1]).toBe('{"name":"x","agentId":"session-test-abc"}')
+  })
+
+  it('does not touch GET or bodyless calls, nor POSTs without an agentId', async () => {
+    const seen: string[] = []
+    const fetchImpl = vi.fn(async (url: string, init: Record<string, never>) => {
+      if (!url.includes('?token=')) seen.push(String(init.body))
+      return url.includes('?token=') ? res(303, '', ['sid=1']) : res(200, { ok: true })
+    })
+    const withAgent = createMarketClient({ ...deps, agentId: 'session-x', fetchImpl: fetchImpl as never })
+    await withAgent.call('/dsh-market/registry')
+    expect(seen[0]).toBe('undefined')
+    const withoutAgent = createMarketClient({ ...deps, fetchImpl: fetchImpl as never })
+    await withoutAgent.call('/dsh-market/install', { method: 'POST', body: { url: 'https://github.com/a/b' } })
+    expect(seen[1]).toBe('{"url":"https://github.com/a/b"}')
+  })
+
   it('degrades non-JSON responses to a readable error payload', async () => {
     const fetchImpl = vi.fn(async (url: string) =>
       url.includes('?token=') ? res(303, '', ['sid=1']) : res(500, '<html>boom</html>'),
