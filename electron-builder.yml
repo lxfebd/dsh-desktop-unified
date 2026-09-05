@@ -46,5 +46,5 @@ nsis:
 
 publish:
   provider: github
-  owner: deepseekhar
+  owner: lxfebd
   repo: dsh-desktop-unified

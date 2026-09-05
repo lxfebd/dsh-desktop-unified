@@ -68,6 +68,13 @@ import {
   type ShellPrefs,
 } from './shell-control.js'
 import { migratePresetDepSpecs, presetDepSpec, type PresetPlugin } from './preset-deps.js'
+import {
+  downloadAsset,
+  fetchLatestRelease,
+  isNewerRemote,
+  pickInstallerAsset,
+  type GitHubRelease,
+} from './github-releases.js'
 
 /** First port tried for the dsh web server. */
 const FIRST_PORT = 3080
@@ -76,7 +83,9 @@ const LAST_PORT = 3099
 /** How long to wait for the server to answer before declaring boot failure. */
 const READY_TIMEOUT_MS = 60_000
 /** Release page used as the manual-download fallback when auto-update fails. */
-const RELEASES_URL = 'https://github.com/deepseekhar/dsh-desktop-unified/releases'
+const RELEASES_URL = 'https://github.com/lxfebd/dsh-desktop-unified/releases'
+/** GitHub repo used by the explicit "pull updates from GitHub" flow. */
+const GITHUB_REPO = 'lxfebd/dsh-desktop-unified'
 
 /**
  * UI locale switch: the shell ships Chinese + English strings; every other
@@ -1418,8 +1427,16 @@ function createTray(port: number): void {
   // Chinese-first for now.
   const zh = isZhLocale()
   const labels = zh
-    ? { show: '显示 DSH Desktop', update: '检查更新…', tools: '外部工具…', logs: '打开日志', data: '打开数据目录', restore: '恢复被禁用的插件并重启', quit: '退出 DSH Desktop' }
-    : { show: 'Show DSH Desktop', update: 'Check for Updates…', tools: 'External Tools…', logs: 'Open log', data: 'Open data folder', restore: 'Restore disabled plugins and restart', quit: 'Quit DSH Desktop' }
+    ? {
+        show: '显示 DSH Desktop', update: '检查更新…', github: '从 GitHub 拉取更新…',
+        tools: '外部工具…', logs: '打开日志', data: '打开数据目录',
+        restore: '恢复被禁用的插件并重启', quit: '退出 DSH Desktop',
+      }
+    : {
+        show: 'Show DSH Desktop', update: 'Check for Updates…', github: 'Pull updates from GitHub…',
+        tools: 'External Tools…', logs: 'Open log', data: 'Open data folder',
+        restore: 'Restore disabled plugins and restart', quit: 'Quit DSH Desktop',
+      }
   // Recovery actions survive the crash that triggered them, so the restore
   // item is offered whenever the record is non-empty — not only right after
   // a safe-mode boot.
@@ -1428,6 +1445,7 @@ function createTray(port: number): void {
     Menu.buildFromTemplate([
       { label: labels.show, click: () => showWindow(port, 'user') },
       { label: labels.update, click: () => void manualUpdateCheck() },
+      { label: labels.github, click: () => void pullUpdateFromGithub() },
       // Troubleshooting entries: the log is the first place to look when the
       // UI misbehaves, and the data dir holds profiles/sessions/plugins.
       { label: labels.logs, click: () => shell.showItemInFolder(logFile()) },
@@ -1609,6 +1627,128 @@ let manualCheckInFlight = false
 /** Whether the in-flight manual check found an update (set by the event). */
 let manualSawUpdate = false
 
+/** 正在进行的 GitHub 拉取更新流程（防重入）。 */
+let githubPullInFlight = false
+/** 下载用的临时目录（userData/downloads）。 */
+function downloadsDir(): string {
+  const d = join(app.getPath('userData'), 'downloads')
+  mkdirSync(d, { recursive: true })
+  return d
+}
+
+/** 下载进度通知（桌面通知，避免对话框打断）；完成后清除。 */
+let githubPullProgressNotification: Notification | undefined
+
+function showGithubPullProgress(received: number, total: number, percent: number): void {
+  if (!Notification.isSupported()) return
+  if (githubPullProgressNotification === undefined) {
+    githubPullProgressNotification = new Notification({ title: 'DSH Desktop 更新', body: '正在从 GitHub 拉取更新…' })
+  }
+  const mb = (b: number): string => (b / 1024 / 1024).toFixed(1) + ' MB'
+  githubPullProgressNotification.body =
+    total > 0 && percent >= 0
+      ? `正在下载 ${percent}%（${mb(received)} / ${mb(total)}）…`
+      : `正在下载（${mb(received)}）…`
+  githubPullProgressNotification.show()
+}
+
+/**
+ * 显式的「从 GitHub 拉取更新」：查询实际发布仓库的最新 release（不依赖
+ * electron-updater 的 latest.yml 与签名），发现新版本就列出变更说明让用户
+ * 确认，随后下载对应平台的安装包到 userData/downloads 并打开（Windows 走
+ * NSIS 安装器，macOS 打开 dmg 让用户拖入 Applications）。macOS 未签名构建
+ * 与 Windows 的 auto-update 都不需要依赖 electron-updater 的配置。
+ */
+async function pullUpdateFromGithub(): Promise<void> {
+  if (githubPullInFlight) return
+  const zh = isZhLocale()
+  githubPullInFlight = true
+  try {
+    const release = await fetchLatestRelease({ repo: GITHUB_REPO })
+    const current = app.getVersion()
+    if (!isNewerRemote(release.version, current)) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: zh ? '检查 GitHub 更新' : 'Check GitHub Updates',
+        message: zh ? `当前已是最新版本（${current}）。` : `You are on the latest version (${current}).`,
+      })
+      return
+    }
+    const asset = pickInstallerAsset(release)
+    if (!asset) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: zh ? '检查 GitHub 更新' : 'Check GitHub Updates',
+        message: zh ? `发现新版本 ${release.version}，但没有适用于此平台的安装包。` : `Found ${release.version}, but no installer for this platform.`,
+        detail: release.notes.slice(0, 1000) || undefined,
+        buttons: [zh ? '打开发布页' : 'Open releases', zh ? '稍后' : 'Later'],
+      }).then(({ response }) => {
+        if (response === 0) void shell.openExternal(RELEASES_URL)
+      })
+      return
+    }
+    const notesPreview = release.notes.trim().slice(0, 2000) || (zh ? '（无变更说明）' : '(no release notes)')
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: zh ? '发现新版本' : 'Update Available',
+      message: `${zh ? '发现新版本' : 'New version'}: ${release.version}（${zh ? '当前' : 'current'} ${current}）`,
+      detail: zh
+        ? `即将从 GitHub 下载安装包：\n${asset.name}\n\n${notesPreview}`
+        : `Downloading from GitHub:\n${asset.name}\n\n${notesPreview}`,
+      buttons: [zh ? '下载并安装' : 'Download & install', zh ? '打开发布页' : 'Open releases', zh ? '稍后' : 'Later'],
+      defaultId: 0,
+      cancelId: 2,
+    })
+    if (response === 1) { void shell.openExternal(RELEASES_URL); return }
+    if (response !== 0) return
+    let lastPct = -1
+    const path = await downloadAsset(asset, downloadsDir(), {
+      onProgress: (p) => {
+        if (p.percent >= 0 && p.percent - lastPct >= 10) lastPct = p.percent
+        showGithubPullProgress(p.received, p.total, p.percent)
+      },
+    })
+    if (githubPullProgressNotification !== undefined) {
+      githubPullProgressNotification.close()
+      githubPullProgressNotification = undefined
+    }
+    const { response: openResp } = await dialog.showMessageBox({
+      type: 'info',
+      title: zh ? '下载完成' : 'Download Complete',
+      message: zh ? `已下载 ${release.version} 的安装包。` : `Downloaded the ${release.version} installer.`,
+      detail: zh
+        ? `文件：${path}\n\nWindows：运行安装包即完成升级。\nmacOS：打开 dmg 并把 DSH Desktop 拖入 Applications。`
+        : `File: ${path}\n\nWindows: run the installer to upgrade.\nmacOS: open the dmg and drag DSH Desktop into Applications.`,
+      buttons: [zh ? '打开安装包' : 'Open installer', zh ? '打开所在文件夹' : 'Show in folder', zh ? '稍后' : 'Later'],
+      defaultId: 0,
+      cancelId: 2,
+    })
+    if (openResp === 0) {
+      const err = await shell.openPath(path)
+      if (err) appendFileSync(logFile(), `\n=== open installer failed: ${err} ===\n`)
+    } else if (openResp === 1) {
+      shell.showItemInFolder(path)
+    }
+  } catch (error) {
+    appendFileSync(logFile(), `\n=== github update pull failed: ${error instanceof Error ? error.message : String(error)} ===\n`)
+    if (githubPullProgressNotification !== undefined) {
+      githubPullProgressNotification.close()
+      githubPullProgressNotification = undefined
+    }
+    await dialog.showMessageBox({
+      type: 'error',
+      title: zh ? '检查 GitHub 更新失败' : 'GitHub Update Check Failed',
+      message: zh ? '无法从 GitHub 获取更新，请检查网络后重试。' : 'Could not reach GitHub. Check your network and retry.',
+      detail: (error instanceof Error ? error.message : String(error)) + `\n\n${RELEASES_URL}`,
+      buttons: [zh ? '打开发布页' : 'Open releases', zh ? '稍后' : 'Later'],
+    }).then(({ response }) => {
+      if (response === 0) void shell.openExternal(RELEASES_URL)
+    })
+  } finally {
+    githubPullInFlight = false
+  }
+}
+
 /**
  * Menu/tray-triggered update check. Unlike the silent 4-hourly poll, a manual
  * click always reports back: re-prompts even for an already-nagged version,
@@ -1699,6 +1839,10 @@ function setupAppMenu(): void {
     label: zh ? '检查更新…' : 'Check for Updates…',
     click: () => void manualUpdateCheck(),
   }
+  const githubCheckItem: Electron.MenuItemConstructorOptions = {
+    label: zh ? '从 GitHub 拉取更新…' : 'Pull updates from GitHub…',
+    click: () => void pullUpdateFromGithub(),
+  }
   const editMenu: Electron.MenuItemConstructorOptions = {
     label: t.edit,
     submenu: [
@@ -1733,6 +1877,7 @@ function setupAppMenu(): void {
             { label: t.about, click: () => void showAbout() },
             { type: 'separator' },
             checkItem,
+            githubCheckItem,
             { type: 'separator' },
             { role: 'services', label: t.services },
             { type: 'separator' },
@@ -1764,7 +1909,7 @@ function setupAppMenu(): void {
       viewMenu,
       {
         label: t.help,
-        submenu: [checkItem, { type: 'separator' }, { label: t.about, click: () => void showAbout() }],
+        submenu: [checkItem, githubCheckItem, { type: 'separator' }, { label: t.about, click: () => void showAbout() }],
       },
     ]),
   )
