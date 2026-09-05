@@ -62,6 +62,13 @@ describe('migratePresetDepSpecs', () => {
     expect(deps.dshmarket).toBe('link:J:/app/node_modules/dshmarket')
   })
 
+  it('rewrites tilde semver ranges (~0.1.2) as registry ranges', () => {
+    const deps: Record<string, string> = { 'dsh-terminal': '~0.1.2' }
+    const changed = migratePresetDepSpecs(deps, PLUGINS, hasManifest(live()))
+    expect(changed).toEqual(['dsh-terminal'])
+    expect(deps['dsh-terminal']).toBe('link:J:/app/node_modules/dsh-terminal')
+  })
+
   it('leaves registry-style local protocols (npm:) alone', () => {
     const deps: Record<string, string> = { 'dshmarket': 'npm:dshmarket-alt@^1.0.0' }
     const changed = migratePresetDepSpecs(deps, PLUGINS, hasManifest(live()))

@@ -67,6 +67,8 @@ export function createSessionNotifier(opts: SessionNotifierOptions): SessionNoti
   /** 最近一次观察到活跃的墙钟时刻（注入时钟）；驱动静止判定 */
   let lastActiveAt = 0
   let lastNotifiedId: string | undefined
+  /** 已通知过的会话：换回该会话（恢复）不重复通知 */
+  const notifiedIds = new Set<string>()
   const notifier: SessionNotifier = {
     onDone: () => {},
     start() {
@@ -75,17 +77,20 @@ export function createSessionNotifier(opts: SessionNotifierOptions): SessionNoti
         const stamp = scanLatestSession(opts.dshHome)
         if (stamp !== undefined) {
           const t = now()
+          const isFirstSight = known === undefined
           const changed =
-            known === undefined ||
-            stamp.sessionId !== known.sessionId ||
-            stamp.lastWriteMs > known.lastWriteMs
+            isFirstSight ||
+            stamp.sessionId !== known!.sessionId ||
+            stamp.lastWriteMs > known!.lastWriteMs
           if (changed) {
-            // 新活跃（含基线）：刷新认知与活跃时刻；不立即通知
+            // 基线（首次观察）只建立认知不触发：启动时把陈旧会话当"完成"
+            // 通知是误报。之后任何新活跃只刷新认知，同样不立即通知。
             known = stamp
             lastActiveAt = t
-          } else if (stamp.sessionId !== lastNotifiedId && t - lastActiveAt >= quietMs) {
+          } else if (stamp.sessionId !== lastNotifiedId && !notifiedIds.has(stamp.sessionId) && t - lastActiveAt >= quietMs) {
             // 自最近活跃起静默超过窗口 → 完成；同一会话只通知一次
             lastNotifiedId = stamp.sessionId
+            notifiedIds.add(stamp.sessionId)
             notifier.onDone(stamp)
           }
         }
@@ -101,6 +106,7 @@ export function createSessionNotifier(opts: SessionNotifierOptions): SessionNoti
       known = undefined
       lastActiveAt = 0
       lastNotifiedId = undefined
+      notifiedIds.clear()
     },
   }
   return notifier

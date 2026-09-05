@@ -23,10 +23,13 @@ export interface PresetPlugin {
 
 /**
  * Specs that resolve WITHOUT the npm registry: local links/paths, workspace
- * and npm-protocol aliases, and git/https sources. Anything else is treated
- * as a registry range (`^1.2.3`, `~0.1`, `1.0.0`, `latest`, …).
+ * and npm-protocol aliases, git/https sources, and home-dir paths. Anything
+ * else is treated as a registry range (`^1.2.3`, `~0.1.2`, `1.0.0`,
+ * `latest`, …). The tilde case is ONLY a bare `~/` home path — a leading `~`
+ * without a slash is a semver tilde range (e.g. `~0.1.2`) and must resolve
+ * against the registry.
  */
-const NON_REGISTRY_SPEC = /^(?:link:|file:|workspace:|npm:|catalog:|git|https?:|github:|\.{1,2}[/\\]|~|[A-Za-z]:[/\\])/
+const NON_REGISTRY_SPEC = /^(?:link:|file:|workspace:|npm:|catalog:|git|https?:|github:|\.{1,2}[/\\]|~[/\\]|[A-Za-z]:[/\\])/
 
 /**
  * The dependency spec the shell writes for a preset plugin: a local link to

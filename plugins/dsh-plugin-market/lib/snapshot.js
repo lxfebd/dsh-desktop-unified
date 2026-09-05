@@ -55,7 +55,14 @@ export function restoreFromSnapshot(dshHome, profile, snapshot) {
   writeFileSync(pkgFile, JSON.stringify(pkg, null, 2), 'utf8')
   const disabledFile = join(dshHome, 'storages', 'dsh-plugin-market', 'disabled.json')
   mkdirSync(join(dshHome, 'storages', 'dsh-plugin-market'), { recursive: true })
-  writeFileSync(disabledFile, JSON.stringify(snapshot.disabled || [], null, 2), 'utf8')
+  // 合并而非整体覆盖：快照记录的是"某个时刻"的禁用列表，直接覆盖会静默丢掉
+  // 快照之后用户的启用/禁用选择。并集保留两条来源的禁用，启用（不在新禁用集）
+  // 的原有项仍被移除。
+  let currentDisabled = []
+  try { currentDisabled = JSON.parse(readFileSync(disabledFile, 'utf8')) } catch { currentDisabled = [] }
+  const merged = [...(snapshot.disabled || []), ...currentDisabled]
+  const mergedSet = [...new Set(merged.filter((n) => typeof n === 'string' && n !== ''))]
+  writeFileSync(disabledFile, JSON.stringify(mergedSet, null, 2), 'utf8')
   return { ok: true, bundles: snapshot.bundles || [] }
 }
 

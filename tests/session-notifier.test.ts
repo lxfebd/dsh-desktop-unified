@@ -71,6 +71,54 @@ test('notifier fires once after quiet window, then once for a new session', asyn
   n.stop()
 })
 
+test('baseline sighting never fires: stale pre-start session alone must not notify even past the quiet window', async () => {
+  const home = freshHome()
+  let clock = EPOCH
+  const fired: string[] = []
+  const advance = async (ms: number) => {
+    await sleep(Math.min(ms, 20))
+    clock += ms
+  }
+  touch(home, 'session-1', EPOCH - 10000) // 启动前 10 秒就静止的陈旧会话
+  const n = createSessionNotifier({ dshHome: home, quietMs: 100, pollMs: 10, now: () => clock })
+  n.onDone = (s) => fired.push(s.sessionId)
+
+  n.start()
+  // 基线 tick 观察到陈旧会话；此后它继续静默，远超 quiet 窗口
+  await advance(400)
+  assert.equal(fired.length, 0, 'baseline stale session must never fire')
+  n.stop()
+})
+
+test('session switch back to an already-notified id must not re-notify', async () => {
+  const home = freshHome()
+  let clock = EPOCH
+  const fired: string[] = []
+  const advance = async (ms: number) => {
+    await sleep(Math.min(ms, 20))
+    clock += ms
+  }
+  touch(home, 'session-1', EPOCH)
+  const n = createSessionNotifier({ dshHome: home, quietMs: 100, pollMs: 10, now: () => clock })
+  n.onDone = (s) => fired.push(s.sessionId)
+
+  n.start()
+  // session-1 活跃 → 静默超窗 → 通知一次
+  clock = EPOCH + 500
+  touch(home, 'session-1', clock)
+  await advance(300)
+  await waitUntil(() => fired.length >= 1, 1500)
+  // 切到 session-2（活跃）再切回 session-1（恢复）：不得再通知
+  clock = EPOCH + 2000
+  touch(home, 'session-2', clock)
+  await advance(300)
+  clock = EPOCH + 3000
+  touch(home, 'session-1', clock)
+  await advance(400)
+  assert.deepEqual(fired, ['session-1'], 'switch-back must not re-notify')
+  n.stop()
+})
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }

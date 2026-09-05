@@ -74,10 +74,21 @@ if (exitCode === 0) {
     }
 
     if (changed) {
-      if (!after.dsh) after.dsh = {};
-      if (!after.dsh.profile) after.dsh.profile = {};
-      after.dsh.profile.bundles = bundles;
-      writeFileSync(pkgFile, JSON.stringify(after, null, 2) + '\n');
+      // 写回前最后一次核对：pnpm 运行期间另一写者（快照恢复/安全模式）可能
+      // 已修改 package.json。若依赖表已变，本轮 reconcile 不覆盖它的成果
+      // （bundles 调整留待下次 pnpm 操作）——基于陈旧视图回写会丢失并发修改。
+      try {
+        var latest = JSON.parse(readFileSync(pkgFile, 'utf8'));
+        var sameDeps = JSON.stringify(latest.dependencies) === JSON.stringify(after.dependencies);
+        if (!sameDeps) {
+          process.stderr.write('[run-pnpm] 检测到并发修改,跳过 bundles reconcile\n');
+        } else {
+          if (!after.dsh) after.dsh = {};
+          if (!after.dsh.profile) after.dsh.profile = {};
+          after.dsh.profile.bundles = bundles;
+          writeFileSync(pkgFile, JSON.stringify(after, null, 2) + '\n');
+        }
+      } catch (e) { process.stderr.write('[run-pnpm] reconcile 写回失败: ' + e.message + '\n') }
     }
   } catch (e) { process.stderr.write('[run-pnpm] reconcile 失败: ' + e.message + '\n') }
 }

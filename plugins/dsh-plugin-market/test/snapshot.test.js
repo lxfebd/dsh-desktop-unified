@@ -35,3 +35,18 @@ test('snapshot file round-trips through the snapshots dir', () => {
   assert.ok(list.length >= 1)
   rmSync(home, { recursive: true, force: true })
 })
+
+test('restore merges disabled lists instead of clobbering post-snapshot changes', () => {
+  const home = freshHome()
+  const disabledDir = join(home, 'storages', 'dsh-plugin-market')
+  mkdirSync(disabledDir, { recursive: true })
+  // 快照时禁用了 a；快照之后用户又禁用了 b（启用 a）
+  const snap = snapshotProfileState({ dshHome: home, profile: 'web' })
+  snap.disabled = ['a']
+  writeFileSync(join(disabledDir, 'disabled.json'), JSON.stringify(['b'], null, 2), 'utf8')
+
+  restoreFromSnapshot(home, 'web', snap)
+  const disabled = JSON.parse(readFileSync(join(disabledDir, 'disabled.json'), 'utf8'))
+  assert.deepEqual(disabled, ['a', 'b'], 'must keep both the snapshot and the current disables')
+  rmSync(home, { recursive: true, force: true })
+})

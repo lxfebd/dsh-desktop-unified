@@ -111,7 +111,15 @@ function buildIcoFromPng(pngPath: string): { ok: boolean; error?: string } {
   }
 }
 
-/** 改 Windows 快捷方式（桌面 / 开始菜单）的 IconLocation 指向 current.ico。 */
+/**
+ * Windows shortcut (.lnk) maintenance: point every shortcut that LAUNCHES THIS
+ * APP at the current icon. Only shortcuts whose target resolves to our own
+ * executable are touched — a shortcut with the same name for some other
+ * DeepSeek tool keeps its icon. Fails loud on spawn errors instead of
+ * reporting success: the old script was a PowerShell parse error (bare string
+ * piped to -Filter), so shortcuts were never updated and the failure was
+ * silently reported as applied.
+ */
 function updateShortcuts(): { ok: boolean; applied: string[]; warning?: string } {
   if (process.platform !== 'win32') {
     return { ok: true, applied: [], warning: '非 Windows，跳过快捷方式' }
@@ -122,20 +130,41 @@ function updateShortcuts(): { ok: boolean; applied: string[]; warning?: string }
     join(home, 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
     join('C:', 'ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
   ].filter(existsSync)
+  if (targets.length === 0) return { ok: true, applied: [], warning: '未找到桌面或开始菜单目录' }
   const ps =
-    `$ws = New-Object -ComObject WScript.Shell\n` +
-    targets.map((t) => `'${t.replace(/'/g, "''")}'`).join(',') +
-    ` -Filter *.lnk -Recurse -ErrorAction SilentlyContinue | ` +
-    `Where-Object { $_.Name -like '*DeepSeek*' -or $_.Name -like '*DSH*' } | ForEach-Object {\n` +
-    `  $lnk = $ws.CreateShortcut($_.FullName)\n` +
-    `  $lnk.IconLocation = "${currentIco()},0"\n` +
-    `  $lnk.Save() }\n`
-  try {
-    spawnSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'ignore' })
-    return { ok: true, applied: targets }
-  } catch (e) {
-    return { ok: false, applied: [], warning: e instanceof Error ? e.message : String(e) }
+    `$ErrorActionPreference = 'Stop'\n` +
+    `$targets = @(${targets.map((t) => `'${t.replace(/'/g, "''")}'`).join(',')})\n` +
+    `$appExe = '${process.execPath.replace(/'/g, "''")}'\n` +
+    `$ico = '${currentIco().replace(/'/g, "''")}'\n` +
+    `$fixed = @()\n` +
+    `foreach ($dir in $targets) {\n` +
+    `  Get-ChildItem -LiteralPath $dir -Filter *.lnk -Recurse -ErrorAction SilentlyContinue | ForEach-Object {\n` +
+    `    try {\n` +
+    `      $lnk = $ws.CreateShortcut($_.FullName)\n` +
+    `      if ($lnk.TargetPath -eq $appExe) {\n` +
+    `        $lnk.IconLocation = "$ico,0"\n` +
+    `        $lnk.Save()\n` +
+    `        $fixed += $_.FullName\n` +
+    `      }\n` +
+    `    } catch {}\n` +
+    `  }\n` +
+    `}\n` +
+    `$fixed | Out-String | Write-Output\n`
+  const exe = existsSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
+    ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    : 'powershell'
+  const r = spawnSync(exe, ['-NoProfile', '-Command', ps], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', windowsHide: true })
+  if (r.error) {
+    return { ok: false, applied: [], warning: '调用 PowerShell 失败: ' + r.error.message }
   }
+  if (r.status !== 0) {
+    return { ok: false, applied: [], warning: `PowerShell 快捷方式更新失败 (exit ${r.status}): ${String(r.stderr ?? '').trim().slice(0, 300)}` }
+  }
+  const fixed = String(r.stdout ?? '')
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return { ok: true, applied: fixed }
 }
 
 /**
@@ -167,12 +196,13 @@ export async function applyShellIcon(
     }
   }
   const sc = updateShortcuts()
-  const applied = ['window', 'taskbar', 'shortcut']
-  return {
-    ok: true,
-    applied,
-    warning: !ico.ok ? 'ICO 转换失败，仅窗口/任务栏生效（' + ico.error + '）' : sc.warning,
-  }
+  const applied = ['window', 'taskbar']
+  if (sc.ok && sc.applied.length > 0) applied.push('shortcut')
+  const warning =
+    !ico.ok
+      ? 'ICO 转换失败，仅窗口/任务栏生效（' + ico.error + '）'
+      : sc.warning
+  return { ok: true, applied, warning }
 }
 
 /** 恢复默认图标：删 meta + current，窗口恢复 devIcon（打包后为 baked-in 图标）。 */

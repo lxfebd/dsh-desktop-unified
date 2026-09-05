@@ -62,12 +62,34 @@ function buildTitlebar(): void {
     b.addEventListener('click', () => ipcRenderer.send('shell:window', { action }))
     return b
   }
+  // 'shell:maximized' 状态同步：用 ONE 全局 handler 驱动 DOM 里所有 toggle 按钮。
+  // 原先每个按钮各自注册一个监听器，重建（frameless 切换）时旧监听器从不移除——
+  // 泄漏的监听器会持续更新已脱离 DOM 的按钮。全局 handler 经阻止默认的
+  // stale==false 检查后，只更新仍在文档中的按钮。
+  const syncMaximize = (event: Event): void => {
+    const ev = event as CustomEvent<{ maximized: boolean }>
+    let stale = false
+    document.querySelectorAll('.dsh-max-toggle').forEach((el) => {
+      if (!el.isConnected) { stale = true; return }
+      const btn = el as HTMLButtonElement
+      btn.textContent = ev.detail.maximized ? '⧉' : '▢'
+    })
+    if (stale) event.preventDefault()
+  }
+  document.addEventListener('dsh:maximized', syncMaximize)
+  ipcRenderer.on('shell:maximized', (_e: unknown, m: boolean) => {
+    document.dispatchEvent(new CustomEvent('dsh:maximized', { detail: { maximized: m } }))
+    // Also mark newly-built buttons with the latest state
+    document.querySelectorAll('.dsh-max-toggle').forEach((el) => {
+      if (el.isConnected) (el as HTMLButtonElement).textContent = m ? '⧉' : '▢'
+    })
+  })
   const mkToggle = (): HTMLButtonElement => {
     const b = document.createElement('button')
+    b.className = 'dsh-max-toggle'
     b.textContent = '▢'
     b.setAttribute('style', '-webkit-app-region:no-drag;border:none;background:transparent;color:#e6e6e6;width:40px;height:28px;cursor:pointer;font-size:12px;')
     b.addEventListener('click', () => ipcRenderer.send('shell:window', { action: 'toggle-maximize' }))
-    ipcRenderer.on('shell:maximized', (_e: unknown, m: boolean) => { b.textContent = m ? '⧉' : '▢' })
     return b
   }
   bar.appendChild(mkBtn('—', 'minimize'))

@@ -13,7 +13,7 @@ import { app, BrowserWindow } from 'electron'
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { applyShellIcon, readIconMeta, resetShellIcon, ensureShellIcon } from './shell-icon.js'
 
@@ -73,6 +73,9 @@ export function savePrefs(p: ShellPrefs): void {
 
 let server: Server | undefined
 let boundPort = 0
+/** Pending /api/shell/restart timer — cleared by stopShellControl so a quit
+ *  within the delay window can never relaunch the app after teardown. */
+let restartTimer: ReturnType<typeof setTimeout> | undefined
 
 /** H3 修复：请求鉴权 token（每次启动随机生成，写入 control-port.json 供插件读取）。 */
 let authToken = ''
@@ -135,14 +138,32 @@ function sendJson(res: ServerResponse, code: number, obj: unknown): void {
   res.end(body)
 }
 
+/** 请求体大小上限：shell 指令都该是几百字节；过大即拒读，防本机进程灌爆内存。 */
+const MAX_BODY_BYTES = 64 * 1024
+
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     let body = ''
-    req.on('data', (c: Buffer) => { body += c })
+    let size = 0
+    let aborted = false
+    req.on('data', (c: Buffer) => {
+      if (aborted) return
+      size += c.length
+      if (size > MAX_BODY_BYTES) {
+        aborted = true
+        resolve({})
+        req.destroy()
+        return
+      }
+      body += c
+    })
     req.on('end', () => {
+      if (aborted) return
       try { resolve(body ? JSON.parse(body) : {}) } catch { resolve({}) }
     })
-    req.on('error', () => resolve({}))
+    req.on('error', () => {
+      if (!aborted) { aborted = true; resolve({}) }
+    })
   })
 }
 
@@ -284,6 +305,7 @@ const ROUTES: Record<string, (ctx: RouteCtx) => Promise<void>> = {
 
   // 请求外壳优雅重启（版本升级后加载新 bundle）。先回 200 让插件读到结果，
   // 再延迟调用 main.ts 注入的重启回调（清理子进程/托盘 → app.relaunch+exit）。
+  // 定时器被追踪：用户若在延迟窗口内退出，stopShellControl 会清除它。
   '/api/shell/restart': safe(async (ctx) => {
     const { req, res, onRestart } = ctx
     if (typeof onRestart !== 'function') return sendJson(res, 503, { error: 'restart unavailable' })
@@ -291,7 +313,9 @@ const ROUTES: Record<string, (ctx: RouteCtx) => Promise<void>> = {
     // 延迟毫秒：给 UI 一点时间显示“正在重启”，并避免与当前响应写入竞争
     const delayMs = clampInt(body.delayMs, 0, 5000, 300)
     sendJson(res, 200, { ok: true, restarting: true, delayMs })
-    setTimeout(() => {
+    if (restartTimer !== undefined) clearTimeout(restartTimer)
+    restartTimer = setTimeout(() => {
+      restartTimer = undefined
       try { onRestart() } catch { /* 重启路径自带日志 */ }
     }, delayMs)
   }),
@@ -330,6 +354,9 @@ export async function startShellControl(
   boundPort = port
   authToken = generateToken()
   writeFileSync(portFile(), JSON.stringify({ port, token: authToken, startedAt: new Date().toISOString() }) + '\n')
+  // control-port.json 携带 auth token：限制为仅当前用户可读写，避免同机其他
+  // 用户进程读取 token 后调用本机 shell 接口。
+  try { chmodSync(portFile(), 0o600) } catch { /* 只读文件系统/非 POSIX：尽力而为 */ }
   server = createServer((req, res) => {
     const origin = req.headers.origin
     if (req.method === 'OPTIONS') {
@@ -375,6 +402,10 @@ export async function startShellControlBridge(
 
 /** 停止服务（退出时清理）。 */
 export function stopShellControl(): void {
+  if (restartTimer !== undefined) {
+    clearTimeout(restartTimer)
+    restartTimer = undefined
+  }
   if (server) { server.close(); server = undefined }
 }
 

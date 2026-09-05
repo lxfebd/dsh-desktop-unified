@@ -307,8 +307,13 @@ function bundledPluginDir(name: string): string {
  * left alone — something else owns the name, and resolution through it works.
  * @param link - the symlink path to maintain
  * @param target - the absolute directory it should point at
+ * @param opts.noReplace - when true, a path that is NOT our symlink is left
+ *   untouched (never unlinked). preheatProfileNodeModules uses this: the flat
+ *   fallback can hold real directories a plugin install wrote there, and
+ *   deleting them would destroy installed packages; the name still resolves
+ *   locally, so leaving it alone is both safe and correct.
  */
-function ensurePluginSymlink(link: string, target: string): void {
+function ensurePluginSymlink(link: string, target: string, opts?: { noReplace?: boolean }): void {
   let stat
   try {
     stat = lstatSync(link)
@@ -316,9 +321,12 @@ function ensurePluginSymlink(link: string, target: string): void {
     stat = undefined
   }
   if (stat !== undefined) {
-    if (!stat.isSymbolicLink()) return
-    if (readlinkSync(link) === target) return
-    unlinkSync(link)
+    if (!stat.isSymbolicLink()) {
+      if (opts?.noReplace) return
+    } else {
+      if (readlinkSync(link) === target) return
+      unlinkSync(link)
+    }
   }
   symlinkSync(target, link, 'junction')
 }
@@ -600,10 +608,11 @@ function preheatProfileNodeModules(): void {
       const link = join(profileFallback, pkgName)
       mkdirSync(dirname(link), { recursive: true })
       if (existsSync(link)) {
+        // A real directory here is an installed package (pnpm wrote it), not a
+        // stale symlink — replacing it would delete a working install.
         try {
           if (readlinkSync(link) === target) { skipped++; continue }
-        } catch { /* not a symlink / unreadable — fall through to replace */ }
-        try { unlinkSync(link) } catch { /* swallow; still try to relink */ }
+        } catch { /* not a symlink — leave the real directory in place */ skipped++; continue }
       }
       symlinkSync(target, link, 'junction')
       linked++
