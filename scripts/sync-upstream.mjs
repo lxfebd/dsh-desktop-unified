@@ -6,17 +6,14 @@
  * the last release tag, or when a tag was left without a release by a
  * failed build.
  *
- * Desktop version scheme, designed to stay valid semver and strictly
- * increasing under electron-updater:
- * - upstream prerelease (e.g. 0.1.0-rc.6) → append a UTC build timestamp as
- *   an extra prerelease segment: 0.1.0-rc.6.202508151030, …
- * - upstream stable (e.g. 0.1.0) → independent patch line starting at
- *   X.Y.(Z+1), bumped until it exceeds the current desktop version
- *
- * The timestamp segment is a fixed-width YYYYMMDDHHMM (12 digits until the
- * year 10000), so lexicographic tag sorting (GitHub's tag dropdown, various
- * release pickers) matches chronological order — a plain counter breaks at
- * digit rollover, where "rc.6.9" sorts above "rc.6.11".
+ * Desktop version scheme — a standalone 1.x line since 1.4.0:
+ * `nextVersion()` bumps the current desktop version by one patch
+ * (1.4.0 → 1.4.1 → …). Strictly increasing and valid semver is guaranteed
+ * by `semver.inc`; the upstream version is tracked in `dsh.upstreamVersion`,
+ * no longer encoded in the desktop number. The pre-1.4.0 scheme
+ * (upstream prerelease + UTC timestamp, e.g. 0.1.2-rc.1.202609041312) is
+ * history; `nextVersion` still renders a legacy prerelease-versioned tree
+ * back onto the stable path if it ever reappears.
  *
  * Writes `changed`, `version`, and `upstream_version` to $GITHUB_OUTPUT when
  * present, and prints them otherwise. The lockfile refresh and the git
@@ -108,8 +105,8 @@ async function probeGithubPrerelease(pinned) {
 }
 
 /**
- * Fixed-width UTC minute stamp (YYYYMMDDHHMM) used as the prerelease build
- * segment. UTC keeps CI runners in any timezone on the same clock.
+ * Fixed-width UTC minute stamp (YYYYMMDDHHMM). Kept for tooling that still
+ * uses it; desktop versions no longer embed a timestamp (see `nextVersion`).
  */
 function buildStamp() {
   const now = new Date()
@@ -122,32 +119,36 @@ function buildStamp() {
 
 /**
  * Compute the next desktop version for a new upstream release.
+ *
+ * Two independent version lines coexist in this repo:
+ * - `package.json` version IS the desktop version. Since 1.4.0 it is a
+ *   standalone semver line (1.4.0 → 1.4.1 → …), no longer tied to the
+ *   upstream version. Bumping it is always a monotonic +1 on the patch.
+ * - `dsh.upstreamVersion` tracks @deepseek-ai/dsh. CI's bump is metadata
+ *   (verb/version in the commit message and release notes) — the dependency
+ *   itself is adjusted by sync-upstream.mjs when upstream moves.
+ *
+ * The old scheme (upstream prerelease + UTC timestamp as an extra prerelease
+ * segment, e.g. 0.1.2-rc.1.202609041312) is kept for history only: the
+ * desktop line left it behind, and resurrecting it would fork the version
+ * space away from the monotonic 1.x line.
+ *
  * @param {string} current - current desktop version (package.json `version`)
- * @param {string} upstream - the upstream version being adopted
- * @returns {string} a valid semver strictly greater than `current`
+ * @param {string} upstream - the upstream version being adopted (display only)
+ * @returns {string} the next desktop version, strictly greater than `current`
  */
 function nextVersion(current, upstream) {
-  const parsed = semver.parse(upstream)
-  if (!parsed) throw new Error(`upstream version ${upstream} is not valid semver`)
-  let candidate
+  void upstream // upstream version no longer drives the desktop number
+  const parsed = semver.parse(current)
+  if (!parsed) throw new Error(`current desktop version ${current} is not valid semver`)
   if (parsed.prerelease.length > 0) {
-    // Every sync run gets a fresh timestamp, so a --force rebuild of the same
-    // upstream release naturally lands on a newer version without inspecting
-    // `current` first.
-    candidate = `${upstream}.${buildStamp()}`
-  } else {
-    // Stable upstream: independent patch line above it.
-    candidate = `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`
+    // Safety net for legacy 0.x-rc.y.timestamp style versions still sitting
+    // in package.json: strip the trailing timestamp segments and take the
+    // stable core, so a rebase onto the 1.x line lands at 0.1.2.
+    const stable = `${parsed.major}.${parsed.minor}.${parsed.patch}`
+    return semver.inc(stable, 'patch')
   }
-  // Never publish a version that is not strictly newer (same-minute --force
-  // rebuild, or upstream released the patch we had already claimed): bump the
-  // trailing numeric segment until it clears `current`.
-  while (!semver.gt(candidate, current)) {
-    const segments = candidate.split('.')
-    segments[segments.length - 1] = String(Number(segments[segments.length - 1]) + 1)
-    candidate = segments.join('.')
-  }
-  return candidate
+  return semver.inc(current, 'patch')
 }
 
 /**
@@ -240,15 +241,18 @@ async function main() {
     console.log(`upstream unchanged at ${latest}; nothing to do`)
   } else {
     const version = nextVersion(pkg.version, latest)
+    const currentUpstream = pkg.dsh?.upstreamVersion ?? pinned
     pkg.dependencies[UPSTREAM] = latest
     pkg.version = version
+    // dsh.upstreamVersion is the authoritative upstream marker; the package
+    // version itself is the standalone desktop line (since 1.4.0).
     pkg.dsh = { ...pkg.dsh, upstream: UPSTREAM, upstreamVersion: latest }
     // Re-pin the @deepseek-ai/* peer-only runtime deps for the new upstream
     // version: electron-builder's production collector ignores peerDependencies,
     // so these must be listed as real dependencies to survive packaging.
     syncPeerOnlyRuntimeDeps(pkg.dependencies, latest)
     writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`)
-    console.log(`upstream ${pinned} -> ${latest}; desktop version -> ${version}`)
+    console.log(`upstream ${currentUpstream} -> ${latest}; desktop version -> ${version}`)
   }
 
   // Probe GitHub for npm-less prerelease tags. This is a reporting channel
