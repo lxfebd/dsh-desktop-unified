@@ -2,7 +2,7 @@
   "name": "dsh-desktop-unified",
   "productName": "DeepSeek Harness",
   "description": "Desktop shell for DeepSeek Harness: downloads as an installer, runs the dsh web UI with Electron's embedded Node — no system Node or npm required.",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": true,
   "author": "dsh-desktop-unified",
   "license": "MIT",
