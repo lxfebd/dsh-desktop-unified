@@ -39,6 +39,14 @@ const UPSTREAM_REPO = 'deepseek-ai/deepseek-harness'
 const execFileAsync = promisify(execFile)
 
 /**
+ * npm executable for this platform. `execFileSync('npm', …)` fails on Windows
+ * where the npm shim ships as npm.cmd; the CI runner is Linux and uses `npm`.
+ */
+function npmBin() {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm'
+}
+
+/**
  * Latest published upstream version, straight from the npm registry.
  *
  * Reads ALL dist-tags and takes the highest semver among them: upstream
@@ -48,7 +56,7 @@ const execFileAsync = promisify(execFile)
  */
 function upstreamLatest() {
   const tags = JSON.parse(
-    execFileSync('npm', ['view', UPSTREAM, 'dist-tags', '--json'], { encoding: 'utf8' }),
+    execFileSync(npmBin(), ['view', UPSTREAM, 'dist-tags', '--json'], { encoding: 'utf8' }),
   )
   const best = Object.values(tags)
     .filter((v) => semver.valid(v))
@@ -210,14 +218,26 @@ function detectPeerOnlyRuntimeDeps(upstreamVersion) {
  * bumping versions of existing entries. Entries are never removed: a peer that
  * later becomes a real dependency elsewhere stays pinned (harmless — the package
  * is still installed) rather than risk a stale reference after a rename.
+ *
+ * A dsh-* peer is only bumped when the exact target version is published on
+ * npm. Upstream sometimes cuts a release before every @deepseek-ai/dsh-*
+ * package lands, or drops a package from the tree between releases; pinning
+ * to a version that does not exist makes the lockfile refresh fail with
+ * ERR_PNPM_NO_MATCHING_VERSION and kills the whole build. Skipping the bump
+ * keeps the previous (resolvable) pin until upstream actually publishes.
  * @param {Record<string, string>} deps - package.json `dependencies` to mutate
  * @param {string} upstreamVersion - version to pin dsh-* peers to
  */
-function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
+async function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
   const peerOnly = detectPeerOnlyRuntimeDeps(upstreamVersion)
   const added = []
   const updated = []
+  const skipped = []
   for (const [name, range] of Object.entries(peerOnly)) {
+    if (name.startsWith(`${SCOPE}/dsh`) && !(await npmVersionExists(name, upstreamVersion))) {
+      skipped.push(`${name}: ${deps[name] ?? '<none>'} not bumped to ^${upstreamVersion} (${upstreamVersion} not on npm yet)`)
+      continue
+    }
     if (deps[name] == null) {
       added.push(name)
     } else if (deps[name] !== range) {
@@ -227,6 +247,34 @@ function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
   }
   if (added.length) console.log(`peer-only runtime deps added: ${added.join(', ')}`)
   if (updated.length) console.log(`peer-only runtime deps updated: ${updated.join('; ')}`)
+  if (skipped.length) console.log(`peer-only runtime deps skipped: ${skipped.join('; ')}`)
+}
+
+/**
+ * Check that an exact version of a package is published on the npm registry.
+ *
+ * Queries the registry over HTTP with the built-in fetch so the verdict is a
+ * plain status code, not an npm CLI error string (npm view prints E404, pnpm
+ * prints "No matching version found" — string matching was wrong and broke
+ * the guard on the first incomplete upstream release it met). Fails open on
+ * any error that is not a clean 404 so a registry outage is not misread as a
+ * missing release (the lockfile refresh surfaces the real error then).
+ * @param {string} name - package name
+ * @param {string} version - exact version to check
+ * @returns {Promise<boolean>} true when the version exists
+ */
+async function npmVersionExists(name, version) {
+  const registry = process.env.npm_config_registry ?? 'https://registry.npmjs.org'
+  try {
+    const response = await fetch(`${registry.replace(/\/$/, '')}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (response.status === 200) return true
+    if (response.status === 404) return false
+    return true // registry hiccup / private mirror quirks — fail open
+  } catch {
+    return true // network error — fail open
+  }
 }
 
 async function main() {
@@ -250,7 +298,7 @@ async function main() {
     // Re-pin the @deepseek-ai/* peer-only runtime deps for the new upstream
     // version: electron-builder's production collector ignores peerDependencies,
     // so these must be listed as real dependencies to survive packaging.
-    syncPeerOnlyRuntimeDeps(pkg.dependencies, latest)
+    await syncPeerOnlyRuntimeDeps(pkg.dependencies, latest)
     writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`)
     console.log(`upstream ${currentUpstream} -> ${latest}; desktop version -> ${version}`)
   }
