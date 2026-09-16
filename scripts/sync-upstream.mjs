@@ -247,7 +247,49 @@ async function syncPeerOnlyRuntimeDeps(deps, upstreamVersion) {
   }
   if (added.length) console.log(`peer-only runtime deps added: ${added.join(', ')}`)
   if (updated.length) console.log(`peer-only runtime deps updated: ${updated.join('; ')}`)
-  if (skipped.length) console.log(`peer-only runtime deps skipped: ${skipped.join('; ')}`)
+    if (skipped.length) console.log(`peer-only runtime deps skipped: ${skipped.join('; ')}`)
+}
+
+/**
+ * Align every `@deepseek-ai/dsh-*` pin in package.json to the upstream release.
+ *
+ * detectPeerOnlyRuntimeDeps only returns packages that appear in some package's
+ * peerDependencies without appearing in any package's dependencies. That misses
+ * runtime deps resolved through ordinary dependency edges (dsh-invariants,
+ * dsh-scope, dsh-timeout, dsh-atomic-write, dsh-subprocess): those are pinned
+ * by hand and nothing else in this script ever touched them, so they froze at
+ * their original 0.1.2-era versions. A `^0.1.2-alpha.2` range is technically
+ * satisfied by 0.1.6-alpha.1, so `pnpm install --lockfile-only` never upgrades
+ * them either — the lockfile keeps the old version and the hoisted linker puts
+ * it at the top level. dsh-subprocess-local@0.1.6-alpha.1 needs
+ * dsh-subprocess's `./control` subpath, which only exists from 0.1.6 on: the
+ * boot died with ERR_PACKAGE_PATH_NOT_EXPORTED.
+ *
+ * Aligning every dsh-* entry to the upstream version closes that gap for both
+ * shapes of pin. Entries whose target version is not on npm yet keep their
+ * previous pin (upstream sometimes cuts a release before every package lands;
+ * dropping a pin would lose the version that still resolves).
+ *
+ * `@deepseek-ai/dsh` itself is pinned exactly rather than under a range, so the
+ * `@deepseek-ai/dsh-` prefix excludes it from here.
+ * @param {Record<string, string>} deps - package.json `dependencies` to mutate
+ * @param {string} upstreamVersion - version to align dsh-* pins to
+ */
+async function syncDshDependencyPins(deps, upstreamVersion) {
+  const updated = []
+  const skipped = []
+  for (const [name, range] of Object.entries(deps)) {
+    if (!name.startsWith(`${SCOPE}/dsh-`)) continue
+    if (range === `^${upstreamVersion}`) continue
+    if (!(await npmVersionExists(name, upstreamVersion))) {
+      skipped.push(`${name}: ${range} not aligned to ^${upstreamVersion} (not on npm yet)`)
+      continue
+    }
+    updated.push(`${name}: ${range} -> ^${upstreamVersion}`)
+    deps[name] = `^${upstreamVersion}`
+  }
+  if (updated.length) console.log(`dsh deps aligned: ${updated.join('; ')}`)
+  if (skipped.length) console.log(`dsh deps not aligned: ${skipped.join('; ')}`)
 }
 
 /**
@@ -299,6 +341,8 @@ async function main() {
     // version: electron-builder's production collector ignores peerDependencies,
     // so these must be listed as real dependencies to survive packaging.
     await syncPeerOnlyRuntimeDeps(pkg.dependencies, latest)
+    // Align every dsh-* pin (peer-only AND hand-pinned) to the same release.
+    await syncDshDependencyPins(pkg.dependencies, latest)
     writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`)
     console.log(`upstream ${currentUpstream} -> ${latest}; desktop version -> ${version}`)
   }
