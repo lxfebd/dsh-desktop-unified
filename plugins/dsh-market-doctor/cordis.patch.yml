@@ -1,0 +1,10 @@
+# dsh-market-doctor bundle patch — inserted after the profile layer.
+#
+# 一行 host：webServer 给出本地自调端口并挂只读路由 /market-doctor/report，
+# connection 提供 launch-token 铸币，tools 提供 market_doctor
+# 工具位。profileContext 与 agents 走 ctx.get 懒取（同 dshmarket），不写进 inject，
+# 免得在不发布这些服务的主机上组合不出来。体检全程只读。
+- insert:
+    - id: dsh-market-doctor
+      name: dsh-market-doctor
+      inject: [webServer, connection, tools]

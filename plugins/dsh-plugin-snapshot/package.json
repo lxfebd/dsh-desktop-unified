@@ -1,0 +1,19 @@
+{
+  "name": "dsh-plugin-snapshot",
+  "description": "DeepSeek Harness 插件集快照插件：把 profile 的插件启动列表（dsh.profile.bundles）、依赖与被停用条目写成宿主恢复流程已经在读的那份快照——storages/dsh-plugin-market/snapshots/<profile>/*.json，让安全模式「回滚到最后一次良好状态」与托盘回滚真的有东西可回（写侧原本属于旧 dsh-plugin-market，它已不是本仓库依赖，本机那份目录整个不存在）。每次启动成功写一份（起得来的状态才算良好），保留最近 20 份。AI 工具 plugin_snapshot_list / plugin_snapshot_create / plugin_snapshot_restore（restore 默认只做预演，写文件要显式 confirm），另有只读路由 GET /api/plugin-snapshot/list。只读写 profile 的 package.json 与快照目录，不碰 node_modules。",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./lib/snapshot.js": { "default": "./lib/snapshot.js" },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" }
+  },
+  "license": "MIT"
+}

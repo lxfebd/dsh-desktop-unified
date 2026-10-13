@@ -1,0 +1,11 @@
+# dsh-plugin-snapshot bundle patch — inserted after the profile layer.
+#
+# 一行 host：webServer 用来挂只读路由 /plugin-snapshot/list（与 dsh-mermaid / dsh-ssh-ops
+# 同款；/api/* 是 connection 的 RPC 命名空间，插件路由挂那下面会被 RPC 分发接管），
+# tools 提供三个 AI 工具位。profileContext 故意不写进 inject——dshmarket 也是
+# ctx.get('profileContext') 懒取，写进 inject 会让本插件在不发布该服务的主机上
+# 永远组合不出来。快照只读写 profile 的 package.json 与 storages 下的快照目录。
+- insert:
+    - id: dsh-plugin-snapshot
+      name: dsh-plugin-snapshot
+      inject: [webServer, tools]

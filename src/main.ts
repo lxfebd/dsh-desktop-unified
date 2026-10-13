@@ -256,6 +256,8 @@ const PRESET_PLUGINS = [
   'dsh-desktop-preset-transfer',
   'dsh-terminal',
   'dsh-market-tools',
+  'dsh-plugin-snapshot',
+  'dsh-market-doctor',
 ]
 
 /**

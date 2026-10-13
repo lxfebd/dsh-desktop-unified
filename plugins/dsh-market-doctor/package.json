@@ -1,0 +1,19 @@
+{
+  "name": "dsh-market-doctor",
+  "description": "DeepSeek Harness 插件生态体检插件：一次调用返回按 critical/high/medium/low/info 分级、每条带证据的结论——预置插件是否真的挂上（没挂上时 market_* 工具位其实不可用）、哪些插件可更新、装卸是否被 running-agent 守卫挡回过（读 profile 的 .dsh-market/log.ndjson）、安全模式回滚快照是否存在、精选目录是否过期、插件声明了但加载不起来（brokenPlugins/unbundled）。数据来自市场自己的路由（installed / capabilities / updates-summary）加 profile 目录里的文件。AI 工具 market_doctor，另有只读路由 GET /api/market-doctor/report。只读，不改任何东西。",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./lib/doctor.js": { "default": "./lib/doctor.js" },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" }
+  },
+  "license": "MIT"
+}
