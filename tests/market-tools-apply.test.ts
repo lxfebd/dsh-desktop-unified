@@ -1,5 +1,5 @@
 // dsh-market-tools · 插件入口集成测试：假 ctx 走真实 apply()，
-// 验证 4 个工具确实注册、参数转投正确的 /dsh-market/* 路由与请求体。
+// 验证 7 个工具确实注册、参数转投正确的 /dsh-market/* 路由与请求体。
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { apply, name as pluginName, inject } from '../plugins/dsh-market-tools/lib/index.js'
 
@@ -49,7 +49,7 @@ describe('dsh-market-tools apply()', () => {
     expect(inject).toEqual(['webServer', 'connection', 'tools'])
   })
 
-  it('registers four market_* tools and routes execute() to the right endpoints', async () => {
+  it('registers seven market_* tools and routes execute() to the right endpoints', async () => {
     const requests: Array<{ url: string; init: Record<string, any> }> = []
     const fetchImpl = vi.fn(async (url: string, init: Record<string, any> = {}) => {
       if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
@@ -62,8 +62,11 @@ describe('dsh-market-tools apply()', () => {
     })
     const { ctx, registered } = makeCtx(fetchImpl as never)
     apply(ctx as never)
-    await vi.waitFor(() => expect(registered.length).toBe(4))
-    expect(registered.map((t) => t.name).sort()).toEqual(['market_install', 'market_list', 'market_uninstall', 'market_update'])
+    await vi.waitFor(() => expect(registered.length).toBe(7))
+    expect(registered.map((t) => t.name).sort()).toEqual([
+      'market_categories', 'market_info', 'market_install', 'market_list',
+      'market_uninstall', 'market_update', 'market_updates',
+    ])
 
     const list = await registered.find((t) => t.name === 'market_list')!.execute({ query: '' })
     expect(list.ok).toBe(true)
@@ -94,7 +97,7 @@ describe('dsh-market-tools apply()', () => {
     )
     const { ctx, registered } = makeCtx(fetchImpl as never)
     apply(ctx as never)
-    await vi.waitFor(() => expect(registered.length).toBe(4))
+    await vi.waitFor(() => expect(registered.length).toBe(7))
     const out = await registered.find((t) => t.name === 'market_install')!.execute({ url: 'https://github.com/o/a' })
     expect(out.stdout.length).toBeLessThan(1500)
     expect(out.stdout).toContain('截断')
@@ -105,18 +108,22 @@ describe('dsh-market-tools apply()', () => {
       sent(String(url))
       if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
       if (url.endsWith('/dsh-market/installed')) {
+        // 真机形状：installed 映射的值是字符串（实测 "link:C:/Users/…/dsh-our-free-model"）。
+        // 旧读法取 .spec，字符串上永远是 undefined —— 预置守卫在真机上从不生效。
         return res(200, {
           installed: {
-            'dsh-shell-control': { spec: 'link:J:/.../node_modules/dsh-shell-control' },
-            'dsh-theme-cyberpunk2077': { spec: 'github:o/cyberpunk' },
+            'dsh-shell-control': 'link:J:/.../node_modules/dsh-shell-control',
+            'dsh-theme-cyberpunk2077': 'github:o/cyberpunk',
+            'dsh-object-shaped': { spec: 'file:./plugins/x' },
           },
+          present: [], disabled: [], live: {},
         })
       }
       return res(200, { ok: true, hot: true })
     })
     const { ctx, registered } = makeCtx(fetchImpl as never)
     apply(ctx as never)
-    await vi.waitFor(() => expect(registered.length).toBe(4))
+    await vi.waitFor(() => expect(registered.length).toBe(7))
     const uninstall = registered.find((t) => t.name === 'market_uninstall')!
     const update = registered.find((t) => t.name === 'market_update')!
 
@@ -124,6 +131,9 @@ describe('dsh-market-tools apply()', () => {
     expect(block).toMatchObject({ ok: false, blocked: true, name: 'dsh-shell-control' })
     const blockUpd = await update.execute({ name: 'dsh-shell-control' })
     expect(blockUpd).toMatchObject({ ok: false, blocked: true })
+
+    const blockObj = await uninstall.execute({ name: 'dsh-object-shaped' })
+    expect(blockObj).toMatchObject({ ok: false, blocked: true, reason: 'preset-plugin' })
 
     const pass = await uninstall.execute({ name: 'dsh-theme-cyberpunk2077' })
     expect(pass.ok).toBe(true)
@@ -147,7 +157,7 @@ describe('dsh-market-tools apply()', () => {
     })
     const { ctx, registered } = makeCtx(fetchImpl as never, 'session-agent-1')
     apply(ctx as never)
-    await vi.waitFor(() => expect(registered.length).toBe(4))
+    await vi.waitFor(() => expect(registered.length).toBe(7))
     await registered.find((t) => t.name === 'market_install')!.execute({ url: 'https://github.com/o/a' })
     await registered.find((t) => t.name === 'market_uninstall')!.execute({ name: 'a' })
     expect(bodies.find((b) => b.includes('/dsh-market/install') || b.includes('url'))).toBe('{"url":"https://github.com/o/a","agentId":"session-agent-1"}')
@@ -163,9 +173,62 @@ describe('dsh-market-tools apply()', () => {
     })
     const { ctx, registered } = makeCtx(fetchImpl as never)
     apply(ctx as never)
-    await vi.waitFor(() => expect(registered.length).toBe(4))
+    await vi.waitFor(() => expect(registered.length).toBe(7))
     await registered.find((t) => t.name === 'market_install')!.execute({ url: 'https://github.com/o/a' })
     expect(bodies).toContain('{"url":"https://github.com/o/a"}')
     expect(bodies[0]).not.toContain('agentId')
+  })
+
+  it('routes the three new tools to capabilities / updates-summary / catalog lookup', async () => {
+    const requests: string[] = []
+    const fetchImpl = vi.fn(async (url: string) => {
+      requests.push(String(url))
+      if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
+      if (url.endsWith('/dsh-market/registry')) {
+        return res(200, { registry: { categories: { ui: { zh: '界面' } }, plugins: [{ name: 'a', owner: 'o', url: 'https://github.com/o/a', category: 'ui', description: { zh: '啊' }, version: '1.2.3', capabilities: ['fs-write'] }] } })
+      }
+      if (url.endsWith('/dsh-market/installed')) return res(200, { installed: { a: '^1.0.0' }, present: ['a'], disabled: [], live: {} })
+      if (url.endsWith('/dsh-market/api/v1/capabilities')) {
+        return res(200, { marketVersion: '1.66.17', features: { updatesSummary: true, restart: false }, endpoints: { updatesSummary: '/dsh-market/api/v1/updates/summary' } })
+      }
+      if (url.includes('/dsh-market/api/v1/updates/summary')) return res(200, { checked: 3, updatable: 1, packages: [{ name: 'a', installedVersion: '1.0.0', latestVersion: '1.1.0' }] })
+      if (url.includes('/dsh-market/api/v1/updates?')) return res(200, { package: { name: 'a', updateAvailable: true } })
+      return res(200, { ok: true, hot: true })
+    })
+    const { ctx, registered } = makeCtx(fetchImpl as never)
+    apply(ctx as never)
+    await vi.waitFor(() => expect(registered.length).toBe(7))
+
+    const info = await registered.find((t) => t.name === 'market_info')!.execute({ name: 'a' })
+    expect(info.ok).toBe(true)
+    expect(info.catalogEntry).toMatchObject({ version: '1.2.3', capabilities: ['fs-write'] })
+    expect(info.update).toMatchObject({ updateAvailable: true })
+
+    const cats = await registered.find((t) => t.name === 'market_categories')!.execute({})
+    expect(cats.categories[0]).toMatchObject({ id: 'ui', zh: '界面', count: 1, installed: 1 })
+
+    const updates = await registered.find((t) => t.name === 'market_updates')!.execute({})
+    expect(updates).toMatchObject({ ok: true, marketVersion: '1.66.17', checked: 3, updatable: 1, restartSupported: false })
+    expect(requests.some((u) => u.endsWith('/dsh-market/api/v1/updates/summary'))).toBe(true)
+
+    // name 走目录解析成 url，再打安装路由
+    const byName = await registered.find((t) => t.name === 'market_install')!.execute({ name: 'a' })
+    expect(byName).toMatchObject({ ok: true, hot: true })
+    expect(requests.some((u) => u.endsWith('/dsh-market/install'))).toBe(true)
+  })
+
+  it('translates the running-agent guard 409 into a structured blocked result', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (String(url).includes('?token=TK')) return res(303, {}, ['sid=t'])
+      if (url.endsWith('/dsh-market/installed')) return res(200, { installed: { a: '^1.0.0' }, present: ['a'], disabled: [], live: {} })
+      return res(409, { error: 'refused while agents are running', agentsBusy: true, runningAgents: ['session-1', 'session-2'] })
+    })
+    const { ctx, registered } = makeCtx(fetchImpl as never)
+    apply(ctx as never)
+    await vi.waitFor(() => expect(registered.length).toBe(7))
+    const out = await registered.find((t) => t.name === 'market_update')!.execute({ name: 'a' })
+    expect(out).toMatchObject({ ok: false, blocked: true, reason: 'agents-busy' })
+    expect(out.runningAgents).toEqual(['session-1', 'session-2'])
+    expect(out.hint).toContain('agent')
   })
 })

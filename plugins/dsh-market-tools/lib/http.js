@@ -191,12 +191,23 @@ function listEntry(entry, installedNames) {
   return out
 }
 
-function installedView(name, spec, installedJson) {
+/**
+ * installed 映射的值在真实主机上是字符串（实测："link:C:/Users/…/dsh-our-free-model"、
+ * "^1.66.17"），但测试里出现过 { spec } 对象形状。两种都吃，否则预置守卫在真机上
+ * 永远读不到 spec（字符串没有 .spec），link:/file: 预置插件的拦截形同不存在。
+ */
+export function specOf(value) {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && typeof value.spec === 'string') return value.spec
+  return ''
+}
+
+function installedView(name, value, installedJson) {
   const present = new Set(Array.isArray(installedJson?.present) ? installedJson.present : [])
   const disabled = new Set(Array.isArray(installedJson?.disabled) ? installedJson.disabled : [])
   const live = new Set(Object.keys(installedJson?.live ?? {}))
   return {
-    spec: typeof spec === 'string' ? spec : String(spec),
+    spec: specOf(value),
     present: present.has(name),
     disabled: disabled.has(name),
     live: live.has(name),
@@ -266,7 +277,7 @@ export function summarizeCatalog(registryJson, installedJson, opts = {}) {
   return {
     source: registry.source ?? registryJson?.source ?? 'unknown',
     catalogUpdated: registry.updated ?? null,
-    catalogTotal: plugins.length,
+    total: plugins.length,
     matched,
     returned: page.length,
     limit,
@@ -382,7 +393,7 @@ export function summarizeCategories(registryJson, installedJson) {
     }
   }
   return {
-    catalogTotal: plugins.length,
+    total: plugins.length,
     catalogUpdated: registry.updated ?? null,
     categories: [...byId.values()].sort((a, b) => b.count - a.count),
   }
@@ -413,7 +424,10 @@ export function interpretBlocked(result) {
 export function presetNames(installedJson) {
   const installed = installedJson?.installed ?? {}
   return Object.entries(installed)
-    .filter(([, spec]) => typeof spec === 'string' && (spec.startsWith('link:') || spec.startsWith('file:')))
+    .filter(([, value]) => {
+      const spec = specOf(value)
+      return spec.startsWith('link:') || spec.startsWith('file:')
+    })
     .map(([name]) => name)
 }
 

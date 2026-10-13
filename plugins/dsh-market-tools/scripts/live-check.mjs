@@ -32,7 +32,7 @@ for (const entry of hot.catalog.slice(0, 5)) {
 }
 
 const cats = summarizeCategories(registryJson, installedJson)
-console.log(`\n[market_categories] ${cats.categories.length} 个分类，目录 ${cats.catalogTotal} 条`)
+console.log(`\n[market_categories] ${cats.categories.length} 个分类，目录 ${cats.total} 条`)
 console.log(`  ${cats.categories.slice(0, 6).map((c) => `${c.zh}:${c.count}(已装${c.installed})`).join('  ')}`)
 
 const info = describeEntry(registryJson, installedJson, 'dsh-knit')

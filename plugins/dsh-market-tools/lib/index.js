@@ -14,6 +14,7 @@ import {
   interpretBlocked,
   presetNames,
   guardPreset,
+  specOf,
 } from './http.js'
 
 export const name = 'dsh-market-tools'
@@ -122,7 +123,7 @@ export function apply(ctx) {
   /** 预置插件（spec 以 link:/file: 开头）在本地直接拒绝，请求根本不发出去。 */
   async function presetBlock(name) {
     const installedJson = await source.installed()
-    const spec = installedJson?.installed?.[name]?.spec
+    const spec = specOf(installedJson?.installed?.[name])
     if (!guardPreset(spec)) return null
     const presets = presetNames(installedJson)
     return {
